@@ -1,23 +1,20 @@
-const express = require("express");
-const dotenv = require("dotenv");
-const cors = require("cors");
+const connectToMongoDB = require('./dbConnect');
+const express = require('express')
+const cors = require('cors')
+require('dotenv').config();
 
-// Load environment variables
-dotenv.config();
+connectToMongoDB();
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+const app = express()
+const port = process.env.PORT
 
-// Middleware
-app.use(express.json()); // To parse JSON request body
-app.use(cors()); // To enable CORS
+app.use(express.json());
+app.use(cors());
 
-// Sample Route
-app.get("/", (req, res) => {
-  res.send("Server is running...");
-});
+//Available routes
+app.use('/api/auth', require('./routes/auth'));
+// app.use('/api/notes', require('./routes/notes'));
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+app.listen(port, () => {
+  console.log(`NoteSync Backend listening on port ${port}`)
+})
