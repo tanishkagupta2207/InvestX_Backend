@@ -10,8 +10,8 @@ require("dotenv").config();
 router.post(
   "/register",
   [
-    body("userName", "Enter a valid userName").isLength({ min: 6 }),
-    body("name", "Enter a valid name").isLength({ min: 3 }),
+    body("userName", "UserName should have atleast 6 characters.").isLength({ min: 6 }),
+    body("name", "Name should have atleast 6 characters.").isLength({ min: 6 }),
     body("email", "Enter a valid email").isEmail(),
     body("password", "Password must be atleast 5 characters").isLength({
       min: 5,
@@ -26,6 +26,7 @@ router.post(
 
     try {
       let username = req.body.userName;
+      let name = req.body.name;
       if (username.length < 6) {
         return res.status(400).json({ success, msg: "Username is too short." });
       }
@@ -47,6 +48,22 @@ router.post(
       }
       if (username[-1] === "_") {
         return res.status(400).json({ success, msg: "Username cannot end with underscore." });
+      }
+      
+      if (name.length < 6) {
+        return res.status(400).json({ success, msg: "Name is too short." });
+      }
+      if (name.length > 16) {
+        return res.status(400).json({ success, msg: "Name is too long." });
+      }
+      const pattern2 = /^[a-zA-Z ]+$/;
+      if (!pattern2.test(name)) {
+        return res
+          .status(400)
+          .json({
+            success,
+            msg: "Name contains invalid characters. Only letters are allowed.",
+          });
       }
 
       //Check whether the user with this email or userName exists already

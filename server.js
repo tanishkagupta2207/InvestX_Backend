@@ -9,6 +9,16 @@ const app = express()
 const port = process.env.PORT
 
 app.use(express.json());
+
+const corsOptions = {
+  origin: 'http://localhost:3000',  // Only allow your frontend to access the backend
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],  // Allow GET and POST requests
+  allowedHeaders: ['Content-Type', 'Authorization', 'auth-token'],  // Allow these headers in requests
+};
+
+app.use(cors(corsOptions));
+
+
 app.use(cors());
 
 //Available routes
