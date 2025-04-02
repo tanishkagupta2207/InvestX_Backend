@@ -4,17 +4,18 @@ const Company = require("../models/Company");
 const Stocks = require("../models/Stocks");
 const connectToMongoDB = require("../dbConnect");
 
-connectToMongoDB();
-
 // --- Date Calculation ---
-const endDate = new Date(); // Today
+const today = new Date();
+const yesterday = new Date(today);
+yesterday.setDate(yesterday.getDate() - 1);
+yesterday.setHours(0, 0, 0, 0);
 const startDate = new Date();
 startDate.setFullYear(startDate.getFullYear() - 2); // Set start date to 2 years ago
 
 // Format dates for yahoo-finance2 (YYYY-MM-DD)
 const formatYMD = (date) => date.toISOString().split("T")[0];
 const period1 = formatYMD(startDate);
-const period2 = formatYMD(endDate);
+const period2 = formatYMD(yesterday); //app is 1 day behind from actual calendar
 
 // --- Data Fetching ---
 async function fetchHistoricalData(symbol) {
@@ -42,83 +43,16 @@ async function fetchHistoricalData(symbol) {
       console.warn(`Symbol ${symbol} might be invalid or delisted. Skipping.`);
     } else {
       // Log other errors more verbosely if needed
-      // console.error(error); // Uncomment for full error details
+      console.error(error); // Uncomment for full error details
     }
     return null; // Return null to indicate failure for this symbol
   }
 }
 
-// List of stock symbols (tickers) to fetch data for
-const SYMBOLS_TO_FETCH = [
-  "AAPL",
-  "MSFT",
-  "GOOGL",
-  "NVDA",
-  "AMZN",
-  "PFE",
-  "JNJ",
-  "MRNA",
-  "LLY",
-  "UNH",
-  "TSLA",
-  "NEE",
-  "ENPH",
-  "PLUG",
-  "SEDG",
-  "JPM",
-  "GS",
-  "MS",
-  "BAC",
-  "C",
-  "PG",
-  "KO",
-  "PEP",
-  "MO",
-  "KMB",
-  "GM",
-  "F",
-  "HMC",
-  "TM",
-  "CAT",
-  "DE",
-  "VMC",
-  "NUE",
-  "MLM",
-  "XOM",
-  "CVX",
-  "COP",
-  "SLB",
-  "HAL",
-  "T",
-  "VZ",
-  "TMUS",
-  "CHTR",
-  "HFCL",
-  "BHP",
-  "RIO",
-  "FCX",
-  "VALE",
-  "NEM",
-]; // Add or change symbols as needed
-
 // --- Data Storage ---
-async function storeHistoricalData(symbol, data) {
+async function storeHistoricalData(symbol, data, companyId) {
   if (!data || data.length === 0) {
     console.log(`No data provided to store for ${symbol}.`);
-    return;
-  }
-  let companyId = null;
-
-  try {
-    const companyInfo = await Company.findOne({ symbol: symbol }).select("_id");
-    if (companyInfo) {
-      companyId = companyInfo._id; // Extract the ObjectId value
-    } else {
-      console.log(`Company with symbol ${symbolValue} not found.`);
-      return;
-    }
-  } catch (error) {
-    console.log(error.message);
     return;
   }
 
@@ -131,6 +65,7 @@ async function storeHistoricalData(symbol, data) {
     low_price: record.low,
     close_price: record.adjClose,
     volume: record.volume,
+    granularity: "daily",
   }));
 
   // Use bulkWrite with upsert to efficiently insert or update records
@@ -165,18 +100,21 @@ async function storeHistoricalData(symbol, data) {
 
 // --- Main Execution ---
 async function run() {
+  await connectToMongoDB();
   console.log("Starting stock data fetch process...");
 
   try {
-    for (const symbol of SYMBOLS_TO_FETCH) {
-      const historicalData = await fetchHistoricalData(symbol);
+    const companies = await Company.find();
+    for (let i = 0; i < companies.length; i++) {
+      const company = companies[i];
+      const historicalData = await fetchHistoricalData(company.symbol);
       if (historicalData) {
-        await storeHistoricalData(symbol, historicalData);
+        await storeHistoricalData(company.symbol, historicalData, company._id);
       }
       // Optional: Add a small delay between requests to be polite to the API source
       await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
     }
-    console.log("Finished processing all symbols.");
+    console.log("Finished processing all Companies.");
   } catch (error) {
     console.error(
       "An unexpected error occurred during the main process:",

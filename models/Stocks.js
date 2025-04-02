@@ -25,6 +25,12 @@ const StocksSchema = new mongoose.Schema({
   volume: {
     type: Number,
   },
+  granularity: {
+    type: String,
+    enum: ["1min", "5min", "daily"],
+    required: true,
+    default: "daily"
+  }
 });
 
 module.exports = mongoose.model("stocks", StocksSchema);
