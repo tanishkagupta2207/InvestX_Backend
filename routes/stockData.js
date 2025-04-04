@@ -3,79 +3,35 @@ const cron = require("node-cron");
 const Stocks = require("../models/Stocks");
 const Company = require("../models/Company");
 const axios = require("axios");
+const fetchUser = require("../middleware/fetchUser");
 require("dotenv").config();
 
 // Data Fetching API Endpoint
-router.get("/:company_id", async (req, res) => {
-    res.json("TODO");
-  //   const { company_id } = req.params;
-  //   const range = req.query.range || "today";
-  //   const now = new Date();
-  //   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  //   try {
-  //     let data = [];
-  //     if (range === "today") {
-  //       const startTime = new Date(today);
-  //       const endTime = now;
-  //       data = await Stocks.find({
-  //         company_id: company_id,
-  //         granularity: "2min",
-  //         date: { $gte: startTime, $lte: endTime },
-  //       }).sort({ date: 1 });
-  //     } else if (range === "last_4_days") {
-  //       const endDate = new Date(today);
-  //       endDate.setDate(endDate.getDate()); // including today
-  //       const startDate = new Date(endDate);
-  //       startDate.setDate(startDate.getDate() - 3);
-  //       const startTime = new Date(
-  //         startDate.getFullYear(),
-  //         startDate.getMonth(),
-  //         startDate.getDate()
-  //       );
-  //       const endTime = new Date(
-  //         endDate.getFullYear(),
-  //         endDate.getMonth(),
-  //         endDate.getDate(),
-  //         23,
-  //         59,
-  //         59,
-  //         999
-  //       );
-  //       data = await Stocks.find({
-  //         company_id: company_id,
-  //         date: { $gte: startTime, $lte: endTime },
-  //       }).sort({ date: 1 });
-  //     } else if (range === "last_2_years") {
-  //       const endDate = new Date(today);
-  //       endDate.setDate(endDate.getDate() - 1); // Consider data up to yesterday
-  //       const startDate = new Date(endDate);
-  //       startDate.setFullYear(startDate.getFullYear() - 2);
-  //       const startTime = new Date(
-  //         startDate.getFullYear(),
-  //         startDate.getMonth(),
-  //         startDate.getDate()
-  //       );
-  //       const endTime = new Date(
-  //         endDate.getFullYear(),
-  //         endDate.getMonth(),
-  //         endDate.getDate(),
-  //         23,
-  //         59,
-  //         59,
-  //         999
-  //       );
-  //       data = await Stocks.find({
-  //         company_id: company_id,
-  //         date: { $gte: startTime, $lte: endTime },
-  //       }).sort({ date: 1 });
-  //     } else {
-  //       return res.status(400).json({ error: "Invalid range parameter" });
-  //     }
-  //     res.json(data);
-  //   } catch (error) {
-  //     console.error("Error fetching stock data:", error);
-  //     res.status(500).json({ error: "Failed to fetch stock data" });
-  //   }
+router.get("/data", fetchUser , async (req, res) => {
+  const { company_id, startDate, endDate } = req.body;
+
+  if (!company_id || !startDate || !endDate) {
+    return res.status(400).json({success:false, error: "Missing required parameters: company_id, startDate, endDate" });
+  }
+
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({success:false, error: "Invalid date format for startDate or endDate. Please use a format that JavaScript Date can parse." });
+    }
+
+    const data = await Stocks.find({
+      company_id: company_id,
+      date: { $gte: start, $lte: end },
+    }).sort({ date: 1 });
+
+    res.json({'success': true, data});
+  } catch (error) {
+    console.error("Error fetching stock data by date range:", error);
+    res.status(500).json({ error: "Failed to fetch stock data" });
+  }
 });
 
 // RapidAPI Configuration

@@ -23,11 +23,10 @@ app.use(cors());
 
 //Available routes
 app.use('/api/auth', require('./routes/auth'));
-// app.use('/api/notes', require('./routes/notes'));
 
 // Stock Data Routes
 const stockDataRoutes = require('./routes/stockData');
-app.use('/api/stock-data', stockDataRoutes);
+app.use('/api/stock', stockDataRoutes);
 
 app.listen(port, () => {
   console.log(`NoteSync Backend listening on port ${port}`)
