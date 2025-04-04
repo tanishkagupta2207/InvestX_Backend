@@ -80,8 +80,8 @@ router.get("/:company_id", async (req, res) => {
 
 // RapidAPI Configuration
 const RAPIDAPI_KEY = process.env.REACT_APP_RAPIDAPI_KEY;
-const RAPIDAPI_HOSTNAME = process.env.RAPIDAPI_HOSTNAME;
-const RAPIDAPI_BASE_URL_INTRADAY = process.env.RAPIDAPI_BASE_URL_INTRADAY;
+const RAPIDAPI_HOSTNAME = process.env.REACT_APP_RAPIDAPI_HOSTNAME;
+const RAPIDAPI_BASE_URL_INTRADAY = process.env.REACT_APP_RAPIDAPI_BASE_URL_INTRADAY;
 const INTRADAY_INTERVAL = "1min";
 
 async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
@@ -293,10 +293,12 @@ async function fetchCompaniesData() {
   const companies = await Company.find();
   for (let i = 0; i < companies.length; i++) {
     const company = companies[i];
+    console.log(`Workspaceing data for: ${company.symbol}`);
     fetchAndStoreYesterdayIntradayData(company.symbol, company._id);
-    // Wait for 10 seconds before processing the next company
+    // Wait for 20 seconds before processing the next company
     await new Promise((resolve) => setTimeout(resolve, 20000));
   }
+  console.log(`Workspaced 1min data for all Companies successfully`);
 }
 
 async function removeYesterdayOneMinuteData() {
@@ -422,12 +424,24 @@ async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
   }
 }
 
+async function fetchCompaniesDataFiveMinuteData() {
+  const companies = await Company.find();
+  for (let i = 0; i < companies.length; i++) {
+    const company = companies[i];
+    console.log(`Workspaceing data for: ${company.symbol}`);
+    fetchAndStoreYesterdayFiveMinuteData(company.symbol, company._id);
+    // Wait for 20 seconds before processing the next company
+    await new Promise((resolve) => setTimeout(resolve, 20000));
+  }
+  console.log(`Workspaced 5min data for all Companies successfully`);
+}
+
 // Schedule tasks
-cron.schedule("15 1 * * *", aggregateDailyData); // Run at 00:45 every day
-cron.schedule("30 1 * * *", pruneOldGranularData); // Run at 00:30 every day
-cron.schedule("45 1 * * *", pruneOldDailyData); // Run at 01:00 every day
-cron.schedule("0 0 * * *", removeYesterdayOneMinuteData); // Run at 00:00 every day
-cron.schedule("45 0 * * *", fetchAndStoreYesterdayFiveMinuteData); // Run at 01:00 every day
-cron.schedule("5 0 * * *", fetchCompaniesData); // Schedule to fetch yesterday's intraday data at 00 :05 for this days trade in app
+cron.schedule("15 21 * * *", aggregateDailyData); // Run at 00:45 every day
+cron.schedule("20 21 * * *", pruneOldGranularData); // Run at 00:30 every day
+cron.schedule("30 21 * * *", pruneOldDailyData); // Run at 01:00 every day
+cron.schedule("10 20 * * *", removeYesterdayOneMinuteData); // Run at 00:00 every day
+cron.schedule("50 20 * * *", fetchCompaniesDataFiveMinuteData); // Run at 01:00 every day
+cron.schedule("15 20 * * *", fetchCompaniesData); // Schedule to fetch yesterday's intraday data at 00 :05 for this days trade in app
 
 module.exports = router;
