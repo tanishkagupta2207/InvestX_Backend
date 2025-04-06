@@ -7,7 +7,7 @@ const fetchUser = require("../middleware/fetchUser");
 require("dotenv").config();
 
 // Data Fetching API Endpoint
-router.get("/data", fetchUser , async (req, res) => {
+router.post("/data", fetchUser , async (req, res) => {
   const { company_id, range} = req.body;
 
   if (!company_id || !range) {
@@ -21,11 +21,11 @@ router.get("/data", fetchUser , async (req, res) => {
     const start = new Date(end);
     let interval = 'daily'; // Set the interval to daily
     if(range === "1D"){
-      start.setDate(start.getDate() - 1); // 1 day before end date
+      // start.setDate(start.getDate() - 1); // 1 day before end date
       interval = '1min';
     }
     else if(range === "5D"){
-      start.setDate(start.getDate() - 5); // 5 days before end date
+      start.setDate(start.getDate() - 4); // 5 days before end date
       interval = '5min';
     }
     else if(range === "1M"){
@@ -70,7 +70,7 @@ router.get("/data", fetchUser , async (req, res) => {
   }
 });
 
-router.get("/company", fetchUser, async (req, res) => {
+router.post("/company", fetchUser, async (req, res) => {
   const { company_id} = req.body;
   if (!company_id) {
     return res.status(400).json({success:false, error: "Missing required parameters: company_id" });
@@ -356,6 +356,13 @@ async function removeYesterdayOneMinuteData() {
     tomorrowYesterday.setMinutes(0);
     tomorrowYesterday.setSeconds(0);
     tomorrowYesterday.setMilliseconds(0);
+    const yesterdayDayOfWeek = tomorrowYesterday.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+
+    // --- Check if 'yesterday' was a weekend day ---
+    if (yesterdayDayOfWeek === 0 || yesterdayDayOfWeek === 6) {
+      console.log(`Skipping deletion because ${tomorrowYesterday} is a weekend.`);
+      return;
+  }
 
     const result = await Stocks.deleteMany({
       granularity: "1min",
@@ -476,11 +483,11 @@ async function fetchCompaniesDataFiveMinuteData() {
 }
 
 // Schedule tasks
-cron.schedule("15 14 * * *", aggregateDailyData); // 4 Run at 00:45 every day
-cron.schedule("30 14 * * *", pruneOldGranularData); // 5 Run at 00:30 every day
-cron.schedule("20 14 * * *", pruneOldDailyData); // 6 Run at 01:00 every day
-cron.schedule("3 13 * * *", removeYesterdayOneMinuteData); // 1 Run at 00:00 every day
-cron.schedule("50 13 * * *", fetchCompaniesDataFiveMinuteData); // 3 Run at 01:00 every day
-cron.schedule("10 13 * * *", fetchCompaniesData); // 2 Schedule to fetch yesterday's intraday data at 00 :05 for this days trade in app
+cron.schedule("0 12 * * *", aggregateDailyData); // 4 Run at 00:45 every day
+cron.schedule("0 12 * * *", pruneOldGranularData); // 5 Run at 00:30 every day
+cron.schedule("0 12 * * *", pruneOldDailyData); // 6 Run at 01:00 every day
+cron.schedule("0 12 * * *", removeYesterdayOneMinuteData); // 2 Run at 00:00 every day
+cron.schedule("0 12 * * *", fetchCompaniesDataFiveMinuteData); // 3 Run at 01:00 every day
+cron.schedule("0 12 * * *", fetchCompaniesData); // 1 Schedule to fetch yesterday's intraday data
 
 module.exports = router;
