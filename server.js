@@ -1,6 +1,7 @@
 const connectToMongoDB = require('./dbConnect');
 const express = require('express')
 const cors = require('cors')
+const stockDataRoutes = require('./routes/stockData');
 require('dotenv').config();
 
 connectToMongoDB();
@@ -23,11 +24,11 @@ app.use(cors());
 
 //Available routes
 app.use('/api/auth', require('./routes/auth'));
-
-// Stock Data Routes
-const stockDataRoutes = require('./routes/stockData');
 app.use('/api/stock', stockDataRoutes);
+app.use('/api/portfolio', require('./routes/portfolio'));
+app.use('/api/transaction', require('./routes/transaction'));
+app.use('/api/watchList', require('./routes/watchList'));
 
 app.listen(port, () => {
-  console.log(`NoteSync Backend listening on port ${port}`)
+  console.log(`InvestX Backend listening on port ${port}`)
 })

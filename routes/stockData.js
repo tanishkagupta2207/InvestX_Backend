@@ -7,54 +7,61 @@ const fetchUser = require("../middleware/fetchUser");
 require("dotenv").config();
 
 // Data Fetching API Endpoint
-router.post("/data", fetchUser , async (req, res) => {
-  const { company_id, range} = req.body;
+router.post("/data", fetchUser, async (req, res) => {
+  const { company_id, range } = req.body;
 
   if (!company_id || !range) {
-    return res.status(400).json({success:false, error: "Missing required parameters: company_id, range" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        error: "Missing required parameters: company_id, range",
+      });
   }
 
   try {
     const now = new Date();
-    const end = new Date(now); 
+    const end = new Date(now);
     end.setDate(end.getDate() - 1); // 1 day before today
     const start = new Date(end);
-    let interval = 'daily'; // Set the interval to daily
-    if(range === "1D"){
+    let interval = "daily"; // Set the interval to daily
+    if (range === "1D") {
       // start.setDate(start.getDate() - 1); // 1 day before end date
-      interval = '1min';
-    }
-    else if(range === "5D"){
+      interval = "1min";
+    } else if (range === "5D") {
       start.setDate(start.getDate() - 4); // 5 days before end date
-      interval = '5min';
-    }
-    else if(range === "1M"){
+      interval = "5min";
+    } else if (range === "1M") {
       start.setMonth(start.getMonth() - 1); // 1 month before end date
-      interval = 'daily';
-    }
-    else if(range === "6M"){
+      interval = "daily";
+    } else if (range === "6M") {
       start.setMonth(start.getMonth() - 6); // 6 months before end date
-      interval = 'daily';
-    }
-    else if(range === "1Y"){
+      interval = "daily";
+    } else if (range === "1Y") {
       start.setFullYear(start.getFullYear() - 1); // 1 year before end date
-      interval = 'daily';
-    }
-    else if(range === "2Y"){
+      interval = "daily";
+    } else if (range === "2Y") {
       start.setFullYear(start.getFullYear() - 2); // 2 year before end date
-      interval = 'daily';
-    }
-    else{
-      return res.status(400).json({success:false, error: "Invalid range parameter. Please use '1D', '5D', '1M', '6M', '1Y', or '2Y'." });
+      interval = "daily";
+    } else {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error:
+            "Invalid range parameter. Please use '1D', '5D', '1M', '6M', '1Y', or '2Y'.",
+        });
     }
     start.setHours(0, 0, 0, 0); // Set to start of the day
     start.setMinutes(0);
     start.setSeconds(0);
     start.setMilliseconds(0);
 
-    const company = await Company.findOne({ _id : company_id });
+    const company = await Company.findOne({ _id: company_id });
     if (!company) {
-      return res.status(404).json({success:false, error: "Company not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Company not found" });
     }
 
     const data = await Stocks.find({
@@ -63,64 +70,79 @@ router.post("/data", fetchUser , async (req, res) => {
       date: { $gte: start, $lte: end },
     }).sort({ date: 1 });
 
-    res.json({'success': true, company: company, data});
+    res.json({ success: true, company: company, data });
   } catch (error) {
     console.error("Error fetching stock data by date range:", error);
-    res.status(500).json({success:false, error: "Failed to fetch stock data" });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch stock data" });
   }
 });
 
 router.post("/company", fetchUser, async (req, res) => {
-  const { company_id} = req.body;
+  const { company_id } = req.body;
   if (!company_id) {
-    return res.status(400).json({success:false, error: "Missing required parameters: company_id" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        error: "Missing required parameters: company_id",
+      });
   }
   try {
-    const data = await Company.findOne({ _id : company_id });
-    res.json({'success': true, data});
+    const data = await Company.findOne({ _id: company_id });
+    res.json({ success: true, data });
   } catch (error) {
     console.error("Error fetching Company Details:", error);
-    res.status(500).json({success:false, error: "Failed to fetch Company Details." });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch Company Details." });
   }
 });
 
 router.get("/categories", fetchUser, async (req, res) => {
   try {
-      const companies = await Company.find({}, 'sector name symbol _id').lean();
-      // Handle case where no companies are found
-      if (!companies || companies.length === 0) {
-          return res.json({ success: true, data: {} });
+    const companies = await Company.find({}, "sector name symbol _id").lean();
+    // Handle case where no companies are found
+    if (!companies || companies.length === 0) {
+      return res.json({ success: true, data: {} });
+    }
+    const groupedData = {}; // Initialize an empty object to store grouped results
+    for (const company of companies) {
+      if (!company.sector || !company.symbol || !company._id || !company.name) {
+        continue; // Skip the company if essential info is missing
       }
-      const groupedData = {}; // Initialize an empty object to store grouped results
-      for (const company of companies) {
-          if (!company.sector || !company.symbol || !company._id || !company.name) {
-              continue; // Skip the company if essential info is missing
-          }
-          const sector = company.sector;
-          const companyInfo = {
-              symbol: company.symbol,
-              name: company.name,
-              company_id: company._id.toString()
-          };
-          if (!groupedData[sector]) {
-              groupedData[sector] = [];
-          }
-          // Push the company info into the array for the correct sector
-          groupedData[sector].push(companyInfo);
+      const sector = company.sector;
+      const companyInfo = {
+        symbol: company.symbol,
+        name: company.name,
+        company_id: company._id.toString(),
+      };
+      if (!groupedData[sector]) {
+        groupedData[sector] = [];
       }
-      for (const sector in groupedData) {
-          groupedData[sector].sort((a, b) => a.symbol.localeCompare(b.symbol));
-      }
-      res.json({ success: true, data: groupedData });
+      // Push the company info into the array for the correct sector
+      groupedData[sector].push(companyInfo);
+    }
+    for (const sector in groupedData) {
+      groupedData[sector].sort((a, b) => a.symbol.localeCompare(b.symbol));
+    }
+    res.json({ success: true, data: groupedData });
   } catch (error) {
-      res.status(500).json({ success: false, error: "Server error: Failed to process company categories." });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "Server error: Failed to process company categories.",
+      });
   }
 });
 
 // RapidAPI Configuration
 const RAPIDAPI_KEY = process.env.REACT_APP_RAPIDAPI_KEY;
 const RAPIDAPI_HOSTNAME = process.env.REACT_APP_RAPIDAPI_HOSTNAME;
-const RAPIDAPI_BASE_URL_INTRADAY = process.env.REACT_APP_RAPIDAPI_BASE_URL_INTRADAY;
+const RAPIDAPI_BASE_URL_INTRADAY =
+  process.env.REACT_APP_RAPIDAPI_BASE_URL_INTRADAY;
 
 async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
   const INTRADAY_INTERVAL = "1min";
@@ -360,9 +382,11 @@ async function removeYesterdayOneMinuteData() {
 
     // --- Check if 'yesterday' was a weekend day ---
     if (yesterdayDayOfWeek === 0 || yesterdayDayOfWeek === 6) {
-      console.log(`Skipping deletion because ${tomorrowYesterday} is a weekend.`);
+      console.log(
+        `Skipping deletion because ${tomorrowYesterday} is a weekend.`
+      );
       return;
-  }
+    }
 
     const result = await Stocks.deleteMany({
       granularity: "1min",
@@ -483,11 +507,11 @@ async function fetchCompaniesDataFiveMinuteData() {
 }
 
 // Schedule tasks
-cron.schedule("0 12 * * *", aggregateDailyData); // 4 Run at 00:45 every day
-cron.schedule("0 12 * * *", pruneOldGranularData); // 5 Run at 00:30 every day
-cron.schedule("0 12 * * *", pruneOldDailyData); // 6 Run at 01:00 every day
-cron.schedule("0 12 * * *", removeYesterdayOneMinuteData); // 2 Run at 00:00 every day
-cron.schedule("0 12 * * *", fetchCompaniesDataFiveMinuteData); // 3 Run at 01:00 every day
-cron.schedule("0 12 * * *", fetchCompaniesData); // 1 Schedule to fetch yesterday's intraday data
+cron.schedule("0 13 * * *", aggregateDailyData); // 4 Run at 00:45 every day
+cron.schedule("3 13 * * *", pruneOldGranularData); // 5 Run at 00:30 every day(5min  data)
+cron.schedule("6 13 * * *", pruneOldDailyData); // 6 Run at 01:00 every day(daily 2yr old data)
+cron.schedule("36 12 * * *", removeYesterdayOneMinuteData); // 2 Run at 00:00 every day
+cron.schedule("40 12 * * *", fetchCompaniesDataFiveMinuteData); // 3 Run at 01:00 every day
+cron.schedule("55 11 * * *", fetchCompaniesData); // 1 Schedule to fetch yesterday's intraday data
 
 module.exports = router;

@@ -21,7 +21,7 @@ const UserSchema = new mongoose.Schema({
     balance:{
         type: Number,
         required: true,
-        default: 10000
+        default: 100000
     },
     profileType:{
         type: String,
