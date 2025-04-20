@@ -20,7 +20,7 @@ const TransactionsSchema = new mongoose.Schema({
   trade_price: {
     type: Number,
   },
-  volume: {
+  quantity: {
     type: Number,
   },
   date: {

@@ -7,10 +7,6 @@ const PortfolioSchema = new mongoose.Schema({
     unique: true,
     ref: "user",
   },
-  balance: {
-    type: Number,
-    required: true,
-  },
   date: {
     type: Date,
     default: Date.now,

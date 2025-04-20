@@ -4,6 +4,7 @@ const { body, validationResult } = require("express-validator");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const fetchUser = require("../middleware/fetchUser");
+const Portfolio = require("../models/Portfolio");
 require("dotenv").config();
 
 // 1. Create a User using: POST "/api/auth/register". No login required
@@ -89,6 +90,11 @@ router.post(
         email: req.body.email,
         password: secPswd,
         profileType: req.body.profileType ? req.body.profileType : "Public",
+      });
+
+      //Create a portfolio 
+      const portfolio = await Portfolio.create({
+        user_id: user.id,
       });
 
       const payload = {

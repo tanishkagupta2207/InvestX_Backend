@@ -2,6 +2,7 @@ const connectToMongoDB = require('./dbConnect');
 const express = require('express')
 const cors = require('cors')
 const stockDataRoutes = require('./routes/stockData');
+const scheduler = require('./routes/Scheduler');
 require('dotenv').config();
 
 connectToMongoDB();

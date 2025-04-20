@@ -7,7 +7,7 @@ const UserStocksSchema = new mongoose.Schema({
     ref: "portfolio",
   },
   company_id: {
-    type: mongoose.Schema.Types.ObjectId, // Or Number if you're using a numerical ID
+    type: mongoose.Schema.Types.ObjectId,
     required: true,
   },
   quantity: {
