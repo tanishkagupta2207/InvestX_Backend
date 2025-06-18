@@ -203,7 +203,7 @@ async function fulfillStopLimitOrdersDaily(orderId) {
       company_id: companyId,
       stop_price,
       order_type,
-    } = order;
+    } =order;
 
     const historicalPrices = await getTodayHistoricalStockPricesFromDB(
       companyId,
@@ -406,7 +406,6 @@ async function fetchUsersAndFulfillOrders() {
       return;
     }
     const users = await User.find();
-    console.log("users: ", users);
 
     for (const user of users) {
       const { _id: userId } = user;
@@ -417,10 +416,7 @@ async function fetchUsersAndFulfillOrders() {
           user_id: userId,
         }
       ).sort({ date: 1 });
-      console.log(pendingOrders);
       for (const order of pendingOrders) {
-        console.log(
-          `Checking order ${order._id} for user ${userId}...`);
         const { _id: orderId, order_sub_type: orderSubType } = order;
         if (orderSubType === "STOP_LIMIT") {
           await fulfillStopLimitOrdersDaily(orderId);
@@ -799,11 +795,11 @@ async function fetchCompaniesDataFiveMinuteData() {
 }
 
 // --- Scheduler for orders ---
-cron.schedule("05 17 * * *", fetchUsersAndFulfillOrders); // run at 12:59
+cron.schedule("20 21 * * *", fetchUsersAndFulfillOrders); // run at 12:59
 // Schedule for stocks data fetching and aggregation
-cron.schedule("20 10 * * *", fetchCompaniesData); // 1 Schedule to fetch yesterday's intraday data
-cron.schedule("25 10 * * *", removeYesterdayOneMinuteData); // 2 Run at 00:00 every day
-cron.schedule("0 11 * * *", fetchCompaniesDataFiveMinuteData); // 3 Run at 01:00 every day
-cron.schedule("30 11 * * *", aggregateDailyData); // 4 Run at 00:45 every day
-cron.schedule("35 11 * * *", pruneOldGranularData); // 5 Run at 00:30 every day(5min  data)
-cron.schedule("40 11 * * *", pruneOldDailyData); // 6 Run at 01:00 every day(daily 2yr old data)
+cron.schedule("00 20 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
+cron.schedule("30 20 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
+cron.schedule("35 20 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
+cron.schedule("05 21 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
+cron.schedule("10 21 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
+cron.schedule("15 21 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)

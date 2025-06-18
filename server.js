@@ -29,6 +29,7 @@ app.use('/api/stock', stockDataRoutes);
 app.use('/api/portfolio', require('./routes/portfolio'));
 app.use('/api/transaction', require('./routes/transaction'));
 app.use('/api/watchList', require('./routes/watchList'));
+app.use('/api/orders', require('./routes/orders'));
 
 app.listen(port, () => {
   console.log(`InvestX Backend listening on port ${port}`)
