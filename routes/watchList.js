@@ -19,7 +19,10 @@ router.post("/add", fetchUser, async (req, res) => {
     //user
     const userId = req.user.id;
 
-    let watchlistItem = await WatchList.findOne({ user_id: userId, company_id: companyId });
+    let watchlistItem = await WatchList.findOne({
+      user_id: userId,
+      company_id: companyId,
+    });
 
     if (watchlistItem) {
       return res
@@ -56,7 +59,10 @@ router.delete("/remove", fetchUser, async (req, res) => {
     //user
     const userId = req.user.id;
 
-    let watchlistItem = await WatchList.findOne({ user_id: userId, company_id: companyId });
+    let watchlistItem = await WatchList.findOne({
+      user_id: userId,
+      company_id: companyId,
+    });
 
     if (watchlistItem) {
       watchlistItem = await WatchList.findOneAndDelete({
@@ -67,9 +73,9 @@ router.delete("/remove", fetchUser, async (req, res) => {
         .status(201)
         .json({ success: true, msg: "Company removed from WatchList." });
     } else {
-        return res
-            .status(404)
-            .json({ success: false, msg: "Company not found in watchlist." });
+      return res
+        .status(404)
+        .json({ success: false, msg: "Company not found in watchlist." });
     }
   } catch (error) {
     console.log(error.message);
@@ -82,15 +88,16 @@ router.get("/get", fetchUser, async (req, res) => {
     //user
     const userId = req.user.id;
 
-    let watchList = await WatchList.find({ user_id: userId});
+    let watchList = await WatchList.find({ user_id: userId });
 
     res.status(201).json({
       success: true,
-      watchList: watchList
+      watchList: watchList,
     });
   } catch (error) {
     console.log(error.message);
     res.status(500).json({ success: false, msg: "Internal error" });
   }
 });
+
 module.exports = router;
