@@ -10,7 +10,43 @@ const Orders = require("../models/Orders");
 const router = express.Router();
 
 router.post("/fetch", fetchUser, async (req, res) => {
+  let success = false;
   
+  const {action} = req.body;
+  // Validate action
+  if (action && (action !== "Buy" && action !== "Sell")) {
+    return res.status(400).json({
+      success,
+      msg: "Invalid action. Must be 'Buy' or 'Sell'.",
+    });
+  }
+
+  try {
+    const userId = req.user.id;
+
+    const queryConditions = { user_id: userId };
+
+    if (action) {
+      queryConditions.action = action; // Filter by action if provided
+    }
+
+    const transactions = await Transactions.find(queryConditions).lean();
+
+    // Fetching company for each transaction
+    for (let transaction of transactions) {
+      const company = await Company.findById(transaction.company_id);
+      if (company) {
+        transaction.company = company.name;
+      } else {
+        transaction.company = "Unknown";
+      }
+    }
+    success = true;
+    res.json({ success, transactions });
+  } catch (error) {
+    console.log(error.message);
+    res.status(500).json({ success, msg: "Internal error" });
+  }
 });
 
 // POST route for market orders
@@ -102,7 +138,7 @@ router.post("/market", fetchUser, async (req, res) => {
       quantity: quantityNum,
       date: updation_time,
     });
-    
+
     //create an order
     const order = await Orders.create({
       user_id: userId,
@@ -126,8 +162,7 @@ router.post("/market", fetchUser, async (req, res) => {
     //userStocks mei will go and average price update
     if (userStock) {
       if (action === "BUY") {
-        const oldTotal =
-          userStock.average_price * userStock.quantity;
+        const oldTotal = userStock.average_price * userStock.quantity;
         const total = oldTotal - amountToAdd;
         userStock.quantity += quantityNum;
         userStock.average_price = total / userStock.quantity;
@@ -322,11 +357,25 @@ router.post("/stopLoss", fetchUser, async (req, res) => {
 
 // POST route for stop limit orders
 router.post("/stopLimit", fetchUser, async (req, res) => {
-  const { quantity, stop_price, limit_price, action, companyId, time_in_force } = req.body;
+  const {
+    quantity,
+    stop_price,
+    limit_price,
+    action,
+    companyId,
+    time_in_force,
+  } = req.body;
   const userId = req.user.id;
   const quantityNum = parseInt(req.body.quantity, 10);
 
-  if (!quantityNum || !stop_price || !limit_price || !action || !companyId || !time_in_force) {
+  if (
+    !quantityNum ||
+    !stop_price ||
+    !limit_price ||
+    !action ||
+    !companyId ||
+    !time_in_force
+  ) {
     return res
       .status(400)
       .json({ success: false, msg: "Missing required fields" });
@@ -404,11 +453,18 @@ router.post("/stopLimit", fetchUser, async (req, res) => {
 
 // POST route for stop limit orders
 router.post("/takeProfit", fetchUser, async (req, res) => {
-  const { quantity, take_profit_price, action, companyId, time_in_force } = req.body;
+  const { quantity, take_profit_price, action, companyId, time_in_force } =
+    req.body;
   const userId = req.user.id;
   const quantityNum = parseInt(req.body.quantity, 10);
 
-  if (!quantityNum || !take_profit_price || !action || !companyId || !time_in_force) {
+  if (
+    !quantityNum ||
+    !take_profit_price ||
+    !action ||
+    !companyId ||
+    !time_in_force
+  ) {
     return res
       .status(400)
       .json({ success: false, msg: "Missing required fields" });
