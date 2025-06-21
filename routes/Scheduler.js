@@ -60,7 +60,7 @@ async function getTodayHistoricalStockPricesFromDB(companyId, startDate) {
   }
 }
 
-async function updateOrderStatusInDB(order, price) {
+async function updateOrderStatusInDB(order, price, updationDate) {
   const { quantity, order_type, company_id, user_id } = order;
   const action = order_type;
   try {
@@ -122,17 +122,18 @@ async function updateOrderStatusInDB(order, price) {
         amountToAdd = quantity * price;
       }
     }
-    const now = new Date();
-    now.setDate(now.getDate() - 1); //yesterDay's date
 
     if (partialFill) {
       if (quantity === 0) {
         orderForUpdate.status = "REJECTED";
+        orderForUpdate.order_updation_date = updationDate;
       } else {
         orderForUpdate.status = "PARTIALLY_FILLED";
+        orderForUpdate.order_updation_date = updationDate;
       }
     } else {
       orderForUpdate.status = "FILLED";
+      orderForUpdate.order_updation_date = updationDate;
     }
     orderForUpdate.filled_quantity = quantity;
     orderForUpdate.average_fill_price = price;
@@ -152,7 +153,7 @@ async function updateOrderStatusInDB(order, price) {
       action: action,
       trade_price: price,
       quantity: quantity,
-      date: now,
+      date: updationDate,
     });
 
     user.balance += amountToAdd;
@@ -209,29 +210,33 @@ async function fulfillStopLimitOrdersDaily(orderId) {
       companyId,
       order.date
     );
-
+    let updation_date = new Date();
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       // let price = 0;
       for (const pricePoint of historicalPrices) {
         if (order_type === "Buy" && pricePoint.high_price >= stop_price) {
           fulfilled = true;
+          updation_date = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         } else if (
           order_type === "Sell" &&
           pricePoint.low_price <= stop_price
         ) {
           fulfilled = true;
+          updation_date = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         }
       }
       if (fulfilled) {
         order.order_sub_type = "LIMIT";
-        await order.save(); // Save the updated order with new order_sub_type
+        order.order_updation_date = updation_date;
+        await order.save(); // Save the updated order with new order_sub_type. and updated updation date
         await fulfillLimitOrdersDaily(order_id); // Call the fulfillLimitOrdersDaily function to process the order
       } else {
         if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
+          order.order_updation_date = updation_date;
           await order.save();
         }
       }
@@ -263,10 +268,12 @@ async function fulfillLimitOrdersDaily(orderId) {
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       let price = 0;
+      const updationDate = new Date(); // Set the updation date to now
       for (const pricePoint of historicalPrices) {
         if (order_type === "Buy" && pricePoint.low_price <= limit_price) {
           price = pricePoint.low_price;
           fulfilled = true;
+          updationDate = pricePoint.date; 
           break; // Once fulfilled, no need to check further for this order
         } else if (
           order_type === "Sell" &&
@@ -274,14 +281,16 @@ async function fulfillLimitOrdersDaily(orderId) {
         ) {
           price = pricePoint.high_price;
           fulfilled = true;
+          updationDate = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         }
       }
       if (fulfilled) {
-        await updateOrderStatusInDB(order, price);
+        await updateOrderStatusInDB(order, price, updationDate);
       } else {
         if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
+          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -313,10 +322,12 @@ async function fulfillstopLossOrdersDaily(orderId) {
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       let price = 0;
+      const updationDate = new Date(); // Set the updation date to now
       for (const pricePoint of historicalPrices) {
         if (order_type === "Buy" && pricePoint.high_price >= stop_price) {
           price = pricePoint.low_price;
           fulfilled = true;
+          updationDate = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         } else if (
           order_type === "Sell" &&
@@ -324,14 +335,16 @@ async function fulfillstopLossOrdersDaily(orderId) {
         ) {
           price = pricePoint.high_price;
           fulfilled = true;
+          updationDate = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         }
       }
       if (fulfilled) {
-        await updateOrderStatusInDB(order, price);
+        await updateOrderStatusInDB(order, price, updationDate);
       } else {
         if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
+          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -363,10 +376,12 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       let price = 0;
+      const updationDate = new Date();
       for (const pricePoint of historicalPrices) {
         if (order_type === "Buy" && pricePoint.low_price <= take_profit_price) {
           price = pricePoint.low_price;
           fulfilled = true;
+          updationDate = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         } else if (
           order_type === "Sell" &&
@@ -374,14 +389,16 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
         ) {
           price = pricePoint.high_price;
           fulfilled = true;
+          updationDate = pricePoint.date;
           break; // Once fulfilled, no need to check further for this order
         }
       }
       if (fulfilled) {
-        await updateOrderStatusInDB(order, price);
+        await updateOrderStatusInDB(order, price, updationDate);
       } else {
         if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
+          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -795,7 +812,7 @@ async function fetchCompaniesDataFiveMinuteData() {
 }
 
 // --- Scheduler for orders ---
-cron.schedule("20 21 * * *", fetchUsersAndFulfillOrders); // run at 12:59
+cron.schedule("48 00 * * *", fetchUsersAndFulfillOrders); // run at 12:59
 // Schedule for stocks data fetching and aggregation
 cron.schedule("00 20 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
 cron.schedule("30 20 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day

@@ -9,6 +9,10 @@ const Orders = require("../models/Orders");
 
 const router = express.Router();
 
+router.post("/fetch", fetchUser, async (req, res) => {
+  
+});
+
 // POST route for market orders
 router.post("/market", fetchUser, async (req, res) => {
   const { quantity, price, action, companyId } = req.body;
@@ -88,7 +92,7 @@ router.post("/market", fetchUser, async (req, res) => {
       }
     }
     now.setDate(now.getDate() - 1);
-
+    const updation_time = new Date();
     //transaction mei will save
     const transaction = await Transactions.create({
       user_id: userId,
@@ -96,9 +100,9 @@ router.post("/market", fetchUser, async (req, res) => {
       action: action === "BUY" ? "Buy" : "Sell",
       trade_price: price,
       quantity: quantityNum,
-      date: now,
+      date: updation_time,
     });
-
+    
     //create an order
     const order = await Orders.create({
       user_id: userId,
@@ -111,6 +115,7 @@ router.post("/market", fetchUser, async (req, res) => {
       filled_quantity: quantityNum,
       average_fill_price: price,
       status: "FILLED",
+      order_updation_date: updation_time,
       date: now,
     });
 

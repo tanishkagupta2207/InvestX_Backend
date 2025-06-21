@@ -65,6 +65,9 @@ const OrdersSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    order_updation_date: {
+      type: Date,
+    },
     date: {
       type: Date,
       default: Date.now,
