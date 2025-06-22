@@ -812,11 +812,11 @@ async function fetchCompaniesDataFiveMinuteData() {
 }
 
 // --- Scheduler for orders ---
-cron.schedule("48 00 * * *", fetchUsersAndFulfillOrders); // run at 12:59
+cron.schedule("20 13 * * *", fetchUsersAndFulfillOrders); // run at 12:59
 // Schedule for stocks data fetching and aggregation
-cron.schedule("00 20 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
-cron.schedule("30 20 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
-cron.schedule("35 20 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
-cron.schedule("05 21 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
-cron.schedule("10 21 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
-cron.schedule("15 21 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)
+cron.schedule("45 11 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
+cron.schedule("15 12 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
+cron.schedule("35 12 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
+cron.schedule("10 13 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
+cron.schedule("13 13 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
+cron.schedule("16 13 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)

@@ -28,7 +28,7 @@ router.post("/add", fetchUser, async (req, res) => {
     if (watchlistItem) {
       return res
         .status(201)
-        .json({ success: true, msg: "Company already in watchlist." });
+        .json({ success: true, msg: "Company already in WatchList." });
     } else {
       watchlistItem = new WatchList({
         user_id: userId,
