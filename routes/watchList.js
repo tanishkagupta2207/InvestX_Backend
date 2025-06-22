@@ -2,6 +2,7 @@ const express = require("express");
 const fetchUser = require("../middleware/fetchUser");
 const User = require("../models/User");
 const WatchList = require("../models/WatchList");
+const Company = require("../models/Company");
 
 const router = express.Router();
 
@@ -88,8 +89,13 @@ router.get("/get", fetchUser, async (req, res) => {
     //user
     const userId = req.user.id;
 
-    let watchList = await WatchList.find({ user_id: userId });
+    const watchList = await WatchList.find({ user_id: userId }).lean();
 
+    for(let company of watchList) {
+      const companyData = await Company.findById(company.company_id);
+      company.symbol = companyData.symbol;
+      company.name = companyData.name;
+    }
     res.status(201).json({
       success: true,
       watchList: watchList,
