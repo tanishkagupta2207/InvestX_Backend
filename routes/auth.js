@@ -11,7 +11,9 @@ require("dotenv").config();
 router.post(
   "/register",
   [
-    body("userName", "UserName should have atleast 6 characters.").isLength({ min: 6 }),
+    body("userName", "UserName should have atleast 6 characters.").isLength({
+      min: 6,
+    }),
     body("name", "Name should have atleast 6 characters.").isLength({ min: 6 }),
     body("email", "Enter a valid email").isEmail(),
     body("password", "Password must be atleast 5 characters").isLength({
@@ -37,20 +39,22 @@ router.post(
       // Regex to check valid characters: letters, numbers, dots, underscores
       const pattern = /^[a-zA-Z0-9_]+$/;
       if (!pattern.test(username)) {
-        return res
-          .status(400)
-          .json({
-            success,
-            msg: "Username contains invalid characters. Only letters, numbers and underscores are allowed.",
-          });
+        return res.status(400).json({
+          success,
+          msg: "Username contains invalid characters. Only letters, numbers and underscores are allowed.",
+        });
       }
       if (username[0] === "_") {
-        return res.status(400).json({ success, msg: "Username cannot start with underscore." });
+        return res
+          .status(400)
+          .json({ success, msg: "Username cannot start with underscore." });
       }
       if (username[-1] === "_") {
-        return res.status(400).json({ success, msg: "Username cannot end with underscore." });
+        return res
+          .status(400)
+          .json({ success, msg: "Username cannot end with underscore." });
       }
-      
+
       if (name.length < 6) {
         return res.status(400).json({ success, msg: "Name is too short." });
       }
@@ -59,12 +63,10 @@ router.post(
       }
       const pattern2 = /^[a-zA-Z ]+$/;
       if (!pattern2.test(name)) {
-        return res
-          .status(400)
-          .json({
-            success,
-            msg: "Name contains invalid characters. Only letters are allowed.",
-          });
+        return res.status(400).json({
+          success,
+          msg: "Name contains invalid characters. Only letters are allowed.",
+        });
       }
 
       //Check whether the user with this email or userName exists already
@@ -92,7 +94,7 @@ router.post(
         profileType: req.body.profileType ? req.body.profileType : "Public",
       });
 
-      //Create a portfolio 
+      //Create a portfolio
       const portfolio = await Portfolio.create({
         user_id: user.id,
       });
@@ -170,5 +172,91 @@ router.get("/getUser", fetchUser, async (req, res) => {
     res.status(500).json({ success, msg: "Internal error" });
   }
 });
+
+// 1. Edit a User using: POST "/api/auth/editAccount". Login required
+router.post(
+  "/editAccount",
+  [
+    body("userName", "UserName should have atleast 6 characters.").isLength({
+      min: 6,
+    }),
+    body("name", "Name should have atleast 6 characters.").isLength({ min: 6 }),
+    body("profileType", "Profile type should be either Public or Private").isIn(
+      ["Public", "Private"]
+    ),
+  ],
+  fetchUser,
+  async (req, res) => {
+    let success = false;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success, msg: errors.array()[0].msg });
+    }
+
+    try {
+      const userId = req.user.id;
+      let username = req.body.userName;
+      let name = req.body.name;
+      if (username.length < 6) {
+        return res.status(400).json({ success, msg: "Username is too short." });
+      }
+      if (username.length > 16) {
+        return res.status(400).json({ success, msg: "Username is too long." });
+      }
+      // Regex to check valid characters: letters, numbers, dots, underscores
+      const pattern = /^[a-zA-Z0-9_]+$/;
+      if (!pattern.test(username)) {
+        return res.status(400).json({
+          success,
+          msg: "Username contains invalid characters. Only letters, numbers and underscores are allowed.",
+        });
+      }
+      if (username[0] === "_") {
+        return res
+          .status(400)
+          .json({ success, msg: "Username cannot start with underscore." });
+      }
+      if (username[-1] === "_") {
+        return res
+          .status(400)
+          .json({ success, msg: "Username cannot end with underscore." });
+      }
+
+      if (name.length < 6) {
+        return res.status(400).json({ success, msg: "Name is too short." });
+      }
+      if (name.length > 16) {
+        return res.status(400).json({ success, msg: "Name is too long." });
+      }
+      const pattern2 = /^[a-zA-Z ]+$/;
+      if (!pattern2.test(name)) {
+        return res.status(400).json({
+          success,
+          msg: "Name contains invalid characters. Only letters are allowed.",
+        });
+      }
+
+      const originalUser = await User.findById(userId);
+
+      let user = await User.findOne({ userName: req.body.userName });
+      if (user && user._id.toString() !== userId) {
+        return res.status(400).json({
+          success,
+          msg: "A User with this userName already exists. Pls select another User Name.",
+        });
+      }
+      //Updating the original user
+      originalUser.name = req.body.name;
+      originalUser.userName = req.body.userName;
+      originalUser.profileType = req.body.profileType;
+      await originalUser.save();
+      success = true;
+      res.json({ success, msg: "Profile updated successfully." });
+    } catch (error) {
+      console.log(error.message);
+      res.status(500).json({ success, msg: "Internal error" });
+    }
+  }
+);
 
 module.exports = router;
