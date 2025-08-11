@@ -20,9 +20,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-
-app.use(cors());
-
 //Available routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/stock', stockDataRoutes);

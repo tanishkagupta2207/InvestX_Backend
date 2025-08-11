@@ -4,11 +4,126 @@ const Portfolio = require("../models/Portfolio");
 const Stocks = require("../models/Stocks");
 const UserStocks = require("../models/UserStocks");
 const Company = require("../models/Company");
+const Finance = require('financejs'); // Correct import for financejs
+const finance = new Finance();
+const Transactions = require("../models/Transactions");
 const fetchUser = require("../middleware/fetchUser");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const router = express.Router();
+
+const calculateFinalPortfolioValue = async (userId) => {
+  try {
+    // 1. Get the user's current cash balance
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error("User not found.");
+    }
+    let totalValue = user.balance;
+
+    // 2. Find the user's portfolio to get the portfolio ID
+    const portfolio = await Portfolio.findOne({ user_id: userId });
+    if (!portfolio) {
+      // If a user has no portfolio, their value is just their cash balance
+      return parseFloat(totalValue.toFixed(2));
+    }
+    const portfolioId = portfolio._id;
+
+    // 3. Find all stocks held by the user in their portfolio
+    const userStocks = await UserStocks.find({ portfolio_id: portfolioId });
+
+    // If the user holds no stocks, return the cash balance
+    if (userStocks.length === 0) {
+      return parseFloat(totalValue.toFixed(2));
+    }
+
+    // 4. Iterate through each stock and get its current market price
+    for (const stock of userStocks) {
+      // Find the latest stock price for the company.
+      // We assume the most recent 'daily' close price is the current price.
+      const latestStockData = await Stocks.findOne({
+        company_id: stock.company_id,
+        granularity: "daily",
+        date: { $lte: new Date() },
+      })
+        .sort({ date: -1 })
+        .limit(1);
+
+      if (latestStockData) {
+        // 5. Calculate the value of this stock holding and add it to the total
+        totalValue += stock.quantity * latestStockData.close_price;
+      }
+    }
+
+    // 6. Return the total portfolio value
+    return parseFloat(totalValue.toFixed(2));
+  } catch (err) {
+    console.error("Error calculating final portfolio value:", err.message);
+    throw err;
+  }
+};
+
+/**
+ * Calculates the Extended Internal Rate of Return (XIRR) for a user's portfolio.
+ * The function fetches all cash flows (initial balance, transactions, and final portfolio value)
+ * and uses the financejs library to compute the XIRR.
+ * @param {string} userId - The ID of the user.
+ * @returns {Promise<number|null>} The calculated XIRR as a decimal, or null if the calculation fails.
+ */
+const calculateUserXIRR = async (userId) => {
+  try {
+    const allCashFlows = [];
+
+    // 1. Fetch initial investment
+    const user = await User.findById(userId);
+    if (!user) {
+      // Throw an error if the user is not found, as we cannot proceed.
+      throw new Error("User not found.");
+    }
+    // Treat the initial balance as a negative cash flow (outflow)
+    allCashFlows.push({ amount: -user.balance, date: user.date });
+
+    // 2. Fetch all transactions (buy/sell)
+    const transactions = await Transactions.find({ user_id: userId });
+    transactions.forEach((transaction) => {
+      const amount =
+        transaction.action === "Buy"
+          ? -(transaction.trade_price * transaction.quantity) // Buy is an outflow
+          : transaction.trade_price * transaction.quantity;  // Sell is an inflow
+      allCashFlows.push({ amount, date: transaction.date });
+    });
+
+    // 3. Calculate final portfolio value
+    const finalPortfolioValue = await calculateFinalPortfolioValue(userId);
+    // Add final portfolio value as the last positive cash flow
+    allCashFlows.push({ amount: finalPortfolioValue, date: new Date() });
+
+    // 4. Sort all cash flows by date to ensure correct order for XIRR
+    allCashFlows.sort((a, b) => a.date - b.date);
+
+    // 5. Separate the sorted data into two arrays for the XIRR function
+    const cashFlows = allCashFlows.map(cf => cf.amount);
+    const dates = allCashFlows.map(cf => cf.date);
+
+    // 6. Validate the cash flows before attempting calculation
+    const hasNegative = cashFlows.some(amount => amount < 0);
+    const hasPositive = cashFlows.some(amount => amount > 0);
+
+    let xirrResult = null;
+    if (hasNegative && hasPositive && cashFlows.length > 1) {
+      xirrResult = finance.XIRR(cashFlows, dates);
+    } else {
+      console.warn('XIRR calculation could not be performed due to invalid cash flows (needs at least one negative and one positive cash flow).');
+    }
+
+    return xirrResult;
+
+  } catch (err) {
+    console.error("Error calculating XIRR:", err.message);
+    throw err;
+  }
+};
 
 // GET route for portfolio data for a specific user
 router.get("/getPortfolio", fetchUser, async (req, res) => {
@@ -137,9 +252,13 @@ router.get("/getPortfolio", fetchUser, async (req, res) => {
         })
         .filter((stock) => stock.id !== "unknown"); // Filter out stocks where company_id was missing
 
+      // Fetch XIRR for the user
+      const xirr = await calculateUserXIRR(userId);
+      
       const responseData = {
         stocks: portfolioStocks,
         Balance: userBalance,
+        xirr: xirr
       };
 
       res.status(200).json({ success: true, data: responseData });
@@ -284,14 +403,18 @@ router.get("/:userId", async (req, res) => {
             symbol: companyDetails.symbol,
             quantity: userStock.quantity || 0,
             average_price: userStock.average_price || 0,
-            current_price: companyDetails.current_price, 
+            current_price: companyDetails.current_price,
           };
         })
-        .filter((stock) => stock.id !== "unknown"); 
+        .filter((stock) => stock.id !== "unknown");
+
+      // Fetch XIRR for the user
+      const xirr = await calculateUserXIRR(userId);
 
       const responseData = {
         stocks: portfolioStocks,
         Balance: userBalance,
+        xirr: xirr
       };
 
       res.status(200).json({ success: true, data: responseData });
