@@ -1,14 +1,20 @@
 const mongoose = require("mongoose");
 
-const UserStocksSchema = new mongoose.Schema({
+const UserHoldingSchema = new mongoose.Schema({
   portfolio_id: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
     ref: "portfolio",
   },
-  company_id: {
+   security_id: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
+    refPath: 'security_type',
+  },
+  security_type: {
+    type: String,
+    required: true,
+    enum: ['company', 'mutualfund']
   },
   quantity: {
     type: Number,
@@ -26,4 +32,4 @@ const UserStocksSchema = new mongoose.Schema({
   },
 });
 
-module.exports = mongoose.model("userstocks", UserStocksSchema);
+module.exports = mongoose.model("userholding", UserHoldingSchema);

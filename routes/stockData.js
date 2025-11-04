@@ -1,33 +1,29 @@
 const router = require("express").Router();
-const Stocks = require("../models/Stocks");
+const Securities = require("../models/Securities");
 const Company = require("../models/Company");
 const fetchUser = require("../middleware/fetchUser");
 
 // Data Fetching API Endpoint
 router.post("/data", fetchUser, async (req, res) => {
-  const { company_id, range } = req.body;
+  const { security_id, range } = req.body;
 
-  if (!company_id || !range) {
+  if (!security_id || !range) {
     return res.status(400).json({
       success: false,
-      error: "Missing required parameters: company_id, range",
+      error: "Missing required parameters: security_id, range",
     });
   }
 
   try {
-    const now = new Date();
-    const end = new Date(now);
-    end.setDate(end.getDate() - 1); // 1 day before today
-    const start = new Date(end);
+    const start = new Date(); // today
     let interval = "daily"; // Set the interval to daily
     if (range === "1D") {
-      // start.setDate(start.getDate() - 1); // 1 day before end date
       interval = "1min";
     } else if (range === "5D") {
-      start.setDate(start.getDate() - 4); // 5 days before end date
+      start.setDate(start.getDate() - 4); // 4 days before today(total 5 days including today)
       interval = "5min";
     } else if (range === "1M") {
-      start.setMonth(start.getMonth() - 1); // 1 month before end date
+      start.setMonth(start.getMonth() - 1); // 1 month before today
       interval = "daily";
     } else if (range === "6M") {
       start.setMonth(start.getMonth() - 6); // 6 months before end date
@@ -46,21 +42,19 @@ router.post("/data", fetchUser, async (req, res) => {
       });
     }
     start.setHours(0, 0, 0, 0); // Set to start of the day
-    start.setMinutes(0);
-    start.setSeconds(0);
-    start.setMilliseconds(0);
 
-    const company = await Company.findOne({ _id: company_id });
+    const company = await Company.findOne({ _id: security_id });
     if (!company) {
       return res
         .status(404)
         .json({ success: false, error: "Company not found" });
     }
 
-    const data = await Stocks.find({
-      company_id: company_id,
+    const data = await Securities.find({
+      security_id: security_id,
+      security_type: "company",
       granularity: interval,
-      date: { $gte: start, $lte: end },
+      date: { $gte: start, $lte: new Date() },
     }).sort({ date: 1 });
 
     res.json({ success: true, company: company, data });
@@ -73,28 +67,30 @@ router.post("/data", fetchUser, async (req, res) => {
 });
 
 router.post("/company", fetchUser, async (req, res) => {
-  const { company_id } = req.body;
-  if (!company_id) {
+  const { security_id } = req.body;
+  if (!security_id) {
     return res.status(400).json({
       success: false,
-      error: "Missing required parameters: company_id",
+      error: "Missing required parameters: security_id",
     });
   }
   try {
-    const data = await Company.findOne({ _id: company_id });
+    const data = await Company.findOne({ _id: security_id });
     const now = new Date();
-    now.setDate(now.getDate() - 1);
-    const latestStock = await Stocks.findOne({
-      company_id: company_id,
-      date: { $lt: now }, // Filter for date less than the current yesterday's time
+    const latestStock = await Securities.findOne({
+      security_id: security_id,
+      security_type: "company",
+      date: { $lte: now },
     })
       .sort({ date: -1 })
       .limit(1);
+    
     res.json({
       success: true,
       data: data,
       current_price: latestStock.close_price,
     });
+
   } catch (error) {
     console.error("Error fetching Company Details:", error);
     res

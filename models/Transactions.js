@@ -6,10 +6,15 @@ const TransactionsSchema = new mongoose.Schema({
     required: true,
     ref: "user",
   },
-  company_id: {
+  security_id: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
-    ref: "company",
+    refPath: 'security_type',
+  },
+  security_type: {
+    type: String,
+    required: true,
+    enum: ['company', 'mutualfund'],
   },
   action: {
     type: String,

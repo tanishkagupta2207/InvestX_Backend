@@ -23,6 +23,7 @@ app.use(cors(corsOptions));
 //Available routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/stock', stockDataRoutes);
+app.use('/api/mutualfund', require('./routes/mutualFundData'));
 app.use('/api/portfolio', require('./routes/portfolio'));
 app.use('/api/transaction', require('./routes/transaction'));
 app.use('/api/watchList', require('./routes/watchList'));

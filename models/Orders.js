@@ -12,10 +12,15 @@ const OrdersSchema = new mongoose.Schema(
       ref: "portfolio",
       required: true,
     },
-    company_id: {
+    security_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "company",
+      refPath: 'security_type',
       required: true,
+    },
+    security_type: {
+        type: String,
+        required: true,
+        enum: ['company', 'mutualfund']
     },
     order_type: {
       type: String,
@@ -24,7 +29,7 @@ const OrdersSchema = new mongoose.Schema(
     },
     order_sub_type: {
       type: String,
-      enum: ["MARKET", "LIMIT", "STOP_LOSS", "TAKE_PROFIT", "STOP_LIMIT"],
+      enum: ["MARKET", "LIMIT", "STOP_LOSS", "TAKE_PROFIT", "STOP_LIMIT", "SIP", "SWP"],
       required: true,
     },
     quantity: {
@@ -56,6 +61,10 @@ const OrdersSchema = new mongoose.Schema(
       type: String,
       enum: ["PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"],
       default: "PENDING",
+    },
+    frequency: {
+      type: String,
+      enum: ["DAILY", "WEEKLY", "MONTHLY"],
     },
     filled_quantity: {
       type: Number,

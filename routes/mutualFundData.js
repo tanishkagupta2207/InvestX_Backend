@@ -1,0 +1,148 @@
+const router = require("express").Router();
+const Securities = require("../models/Securities");
+const MutualFund = require("../models/MutualFund");
+const fetchUser = require("../middleware/fetchUser");
+
+// --- 1. NAV Data Fetching API Endpoint (History) ---
+router.post("/data", fetchUser, async (req, res) => {
+    const { security_id, range } = req.body; 
+
+    if (!security_id || !range) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters: security_id, range",
+      });
+    }
+
+    try {
+        const end = new Date(); 
+        let start = new Date(end); 
+        const interval = "daily";
+
+        // Calculate the start date based on the requested range
+        if (range === "1M") {
+          start.setMonth(start.getMonth() - 1);
+        } else if (range === "6M") {
+          start.setMonth(start.getMonth() - 6);
+        } else if (range === "1Y") {
+          start.setFullYear(start.getFullYear() - 1);
+        } else if (range === "2Y") {
+          start.setFullYear(start.getFullYear() - 2);
+        } else {
+          // Reject intraday ranges not applicable to mutual funds
+          return res.status(400).json({
+            success: false,
+            error:
+        	"Invalid range parameter for Mutual Fund. Please use '1M', '6M', '1Y', or '2Y'.",
+        });
+        }
+        start.setHours(0, 0, 0, 0); 
+
+        const mutualFund = await MutualFund.findOne({ _id: security_id });
+        if (!mutualFund) {
+          return res
+            .status(404)
+            .json({ success: false, error: "Mutual Fund not found" });
+        }
+
+        // Query the Securities collection for NAV data
+        const data = await Securities.find({
+          security_id: security_id,
+          security_type: "mutualfund", // Filter by mutualfund type
+          granularity: interval,
+          date: { $gte: start, $lte: end },
+        }).sort({ date: 1 });
+
+        res.json({ success: true, mutualFund: mutualFund, data });
+    } catch (error) {
+      console.error("Error fetching mutual fund NAV data by date range:", error);
+  	  res
+  	    .status(500)
+  	    .json({ success: false, error: "Failed to fetch mutual fund NAV data" });
+    }
+});
+
+// --- 2. Mutual Fund Details and Latest NAV Endpoint ---
+router.post("/details", fetchUser, async (req, res) => {
+    const { security_id } = req.body;
+    if (!security_id) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameters: security_id",
+      });
+    }
+    try {
+        const data = await MutualFund.findOne({ _id: security_id });
+        if (!data) {
+            return res.status(404).json({ success: false, error: "Mutual Fund not found" });
+        }
+
+        // Use current date as the cutoff for fetching the latest NAV
+        const now = new Date(); 
+
+        const latestNav = await Securities.findOne({
+          security_id: security_id,
+          security_type: "mutualfund",
+          granularity: "daily",
+          date: { $lte: now },
+        })
+            .sort({ date: -1 })
+            .limit(1);
+
+        res.json({
+          success: true,
+          data: data,
+          // Return NAV instead of close_price
+          current_nav: latestNav ? latestNav.nav : 0, 
+        });
+
+    } catch (error) {
+  	  console.error("Error fetching Mutual Fund Details:", error);
+  	  res
+  	    .status(500)
+  	    .json({ success: false, error: "Failed to fetch Mutual Fund Details." });
+    }
+});
+
+// --- 3. Mutual Fund Categories (Group by the 'category' field) ---
+router.get("/categories", fetchUser, async (req, res) => {
+    try {
+        // Group mutual funds by the 'category' field (e.g., Large_Cap, Mid_Cap)
+        const mutualFunds = await MutualFund.find({}, "category name fund_house _id").lean();
+        
+        if (!mutualFunds || mutualFunds.length === 0) {
+            return res.json({ success: true, data: {} });
+        }
+        
+        const groupedData = {}; 
+        for (const fund of mutualFunds) {
+          if (!fund.category || !fund.name || !fund._id) {
+            continue;
+  	      }
+  	      const category = fund.category;
+  	      const fundInfo = {
+  	        name: fund.name,
+  	        fund_house: fund.fund_house, // Added Fund House for extra info
+  	        security_id: fund._id.toString(),
+  	      };
+  	      if (!groupedData[category]) {
+  	        groupedData[category] = [];
+  	      }
+  	      groupedData[category].push(fundInfo);
+  	    }
+        // Sort the funds within each category by name
+  	    for (const category in groupedData) {
+  	      groupedData[category].sort((a, b) => a.name.localeCompare(b.name));
+  	    }
+
+  	    res.json({ success: true, data: groupedData });
+    } catch (error) {
+  	  console.error("Server error: Failed to process mutual fund categories.", error);
+  	  res.status(500).json({
+  	    success: false,
+  	    error: "Server error: Failed to process mutual fund categories.",
+  	  });
+    }
+});
+
+module.exports = router;

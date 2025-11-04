@@ -1,10 +1,15 @@
 const mongoose = require("mongoose");
 
-const StocksSchema = new mongoose.Schema({
-  company_id: {
+const SecuritiesSchema = new mongoose.Schema({
+  security_id: {
     type: mongoose.Schema.Types.ObjectId,
     required: true,
-    ref: "company",
+    refPath: 'security_type'
+  },
+  security_type: {
+    type: String,
+    required: true,
+    enum: ['company', 'mutualfund']
   },
   date: {
     type: Date,
@@ -30,7 +35,11 @@ const StocksSchema = new mongoose.Schema({
     enum: ["1min", "5min", "daily"],
     required: true,
     default: "daily"
+  },
+  // NAV for Mutual Funds
+  nav: {
+    type: Number,
   }
 });
 
-module.exports = mongoose.model("stocks", StocksSchema);
+module.exports = mongoose.model("securities", SecuritiesSchema);

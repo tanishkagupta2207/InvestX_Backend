@@ -5,9 +5,17 @@ const CustomWatchlistSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  companies: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "company",
+  securities: [{
+    security_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: 'securities.security_type',
+      required: true,
+    },
+    security_type: {
+      type: String,
+      enum: ['company', 'mutualfund'],
+      required: true,
+    }
   }],
   date: {
     type: Date,

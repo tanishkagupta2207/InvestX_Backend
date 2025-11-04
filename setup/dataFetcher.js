@@ -1,65 +1,112 @@
 // Import necessary libraries
-const yahooFinance = require("yahoo-finance2").default; // Note the .default import
+const yahooFinance = require("yahoo-finance2").default;
 const Company = require("../models/Company");
-const Stocks = require("../models/Stocks");
+const MutualFund = require("../models/MutualFund");
+const Securities = require("../models/Securities");
 const connectToMongoDB = require("../dbConnect");
+const axios = require("axios");
+const {getSimulatedPrevDate, getSimulatedNextDate} = require("../utils/DateUtils");
 
 // --- Date Calculation ---
-const today = new Date();
-const yesterday = new Date(today);
-yesterday.setDate(yesterday.getDate() - 1);
-yesterday.setHours(0, 0, 0, 0);
+const simulatedDateToday = getSimulatedPrevDate();
+simulatedDateToday.setHours(0, 0, 0, 0); // Normalize to start of the day
 const startDate = new Date();
-startDate.setFullYear(startDate.getFullYear() - 2); // Set start date to 2 years ago
+startDate.setFullYear(startDate.getFullYear() - 2);
 
 // Format dates for yahoo-finance2 (YYYY-MM-DD)
 const formatYMD = (date) => date.toISOString().split("T")[0];
 const period1 = formatYMD(startDate);
-const period2 = formatYMD(yesterday); //app is 1 day behind from actual calendar
+const period2 = formatYMD(simulatedDateToday);
 
-// --- Data Fetching ---
+// --- Data Fetching for Stocks ---
 async function fetchHistoricalData(symbol) {
   console.log(
-    `Workspaceing data for ${symbol} from ${period1} to ${period2}...`
+    `Fetching stock data for ${symbol} from ${period1} to ${period2}...`
   );
   try {
     const queryOptions = {
-      period1: period1, // Start date
-      period2: period2, // End date
-      interval: "1d", // '1d' for daily, '1wk' for weekly, '1mo' for monthly
-      // includeAdjustedClose: true // Usually included by default
+      period1: period1,
+      period2: period2,
+      interval: "1d",
     };
-    // Use the historical method from yahoo-finance2
     const results = await yahooFinance.historical(symbol, queryOptions);
-    console.log(`Workspaceed ${results.length} records for ${symbol}.`);
+    console.log(`Fetched ${results.length} records for ${symbol}.`);
     return results;
   } catch (error) {
     console.error(`Error fetching data for ${symbol}:`, error.message);
-    // Check for common errors like 'Not Found' if the symbol is invalid
     if (
       error.name === "FailedYahooValidationError" ||
       error.message.includes("404")
     ) {
       console.warn(`Symbol ${symbol} might be invalid or delisted. Skipping.`);
     } else {
-      // Log other errors more verbosely if needed
-      console.error(error); // Uncomment for full error details
+      console.error(error);
     }
-    return null; // Return null to indicate failure for this symbol
+    return null;
   }
 }
 
-// --- Data Storage ---
-async function storeHistoricalData(symbol, data, companyId) {
+// --- Data Fetching for Mutual Funds ---
+const MFAPI_BASE_URL =  process.env.REACT_APP_MFAPI_BASE_URL;
+
+// Function to fetch and filter historical NAV for a scheme
+async function fetchHistoricalNav(schemeCode) {
+    console.log(`Fetching all historical NAV for scheme code ${schemeCode}...`);
+    try {
+        const response = await axios.get(`${MFAPI_BASE_URL}${schemeCode}`);
+        const data = response.data;
+
+        if (!data || !data.data) {
+            console.log("No data found in the API response.");
+            return [];
+        }
+
+        const allNavData = data.data;
+        const documentsToStore = [];
+        
+        // Calculate the cutoff date (2 years ago from today)
+        const cutoffDate = new Date(simulatedDateToday);
+        cutoffDate.setFullYear(simulatedDateToday.getFullYear() - 2);
+
+        console.log(`Filtering data after cutoff date: ${cutoffDate.toISOString().split('T')[0]}`);
+
+        // Iterate through the historical data and only select records within the last 2 years
+        for (const record of allNavData) {
+            // The date format is DD-MM-YYYY, so it needs to be reversed for the Date constructor
+            const recordDate = new Date(record.date.split('-').reverse().join('-'));
+
+            // If the record date is older than the cutoff date, stop processing
+            if (recordDate < cutoffDate) {
+                break;
+            }
+
+            // Otherwise, add the record to our list
+            documentsToStore.push({
+                date: recordDate,
+                nav: parseFloat(record.nav),
+            });
+        }
+        
+        console.log(`Filtered down to ${documentsToStore.length} records within the last 2 years.`);
+        return documentsToStore;
+
+    } catch (error) {
+        console.error(`Error fetching NAV for scheme code ${schemeCode}:`, error.message);
+        return null;
+    }
+}
+
+// --- Data Storage for Stocks ---
+async function storeHistoricalData(securityId, symbol, data) {
   if (!data || data.length === 0) {
     console.log(`No data provided to store for ${symbol}.`);
     return;
   }
 
-  // Prepare data for MongoDB: Add symbol and ensure date is a Date object
   const documents = data.map((record) => ({
-    company_id: companyId,
-    date: new Date(record.date), // Convert string date to BSON Date object
+    security_id: securityId,
+    security_type: "company",
+    date: getSimulatedNextDate(new Date(record.date)),
     open_price: record.open,
     high_price: record.high,
     low_price: record.low,
@@ -68,59 +115,94 @@ async function storeHistoricalData(symbol, data, companyId) {
     granularity: "daily",
   }));
 
-  // Use bulkWrite with upsert to efficiently insert or update records
   const bulkOps = documents.map((doc) => ({
     updateOne: {
-      filter: { company_id: doc.companyId, date: doc.date }, // Find document by symbol and date
-      update: { $set: doc }, // Set all fields (update if exists)
-      upsert: true, // Insert if it doesn't exist
+      filter: { security_id: doc.security_id, date: doc.date },
+      update: { $set: doc },
+      upsert: true,
     },
   }));
 
   try {
     if (bulkOps.length > 0) {
-      const result = await Stocks.bulkWrite(bulkOps);
+      const result = await Securities.bulkWrite(bulkOps); // Corrected to Securities
       console.log(
-        `Stored data for ${symbol}. Matched: ${result.matchedCount}, Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
+        `Stored data for ${symbol}. Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
       );
     } else {
       console.log(`No documents prepared for bulk write for ${symbol}.`);
     }
   } catch (error) {
     console.error(`Error storing data for ${symbol} in MongoDB:`, error);
-    // Handle specific bulk write errors if necessary (e.g., index constraint violations)
-    if (error.code === 11000) {
-      // E11000 duplicate key error
-      console.error(
-        `Duplicate key error likely prevented by upsert, but check index/data for ${symbol}.`
-      );
-    }
   }
+}
+
+// --- Data Storage for Mutual Funds ---
+async function storeHistoricalNav(securityId, name, data) {
+    if (!data || data.length === 0) {
+        console.log(`No data provided to store for ${name}.`);
+        return;
+    }
+    
+    // The documents are already in the correct format from fetchHistoricalNav
+    const documents = data.map((record) => ({
+        security_id: securityId,
+        security_type: "mutualfund",
+        date: getSimulatedNextDate(new Date(record.date)),
+        nav: record.nav,
+        granularity: "daily",
+    }));
+
+    const bulkOps = documents.map((doc) => ({
+        updateOne: {
+            filter: { security_id: doc.security_id, date: doc.date },
+            update: { $set: doc },
+            upsert: true,
+        },
+    }));
+
+    try {
+        if (bulkOps.length > 0) {
+            const result = await Securities.bulkWrite(bulkOps);
+            console.log(
+                `Stored NAV data for ${name}. Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
+            );
+        }
+    } catch (error) {
+        console.error(`Error storing NAV data for ${name} in MongoDB:`, error);
+    }
 }
 
 // --- Main Execution ---
 async function run() {
   await connectToMongoDB();
-  console.log("Starting stock data fetch process...");
+  console.log("Starting data fetch process for all securities...");
 
-  try {
-    const companies = await Company.find();
-    for (let i = 0; i < companies.length; i++) {
-      const company = companies[i];
-      const historicalData = await fetchHistoricalData(company.symbol);
-      if (historicalData) {
-        await storeHistoricalData(company.symbol, historicalData, company._id);
-      }
-      // Optional: Add a small delay between requests to be polite to the API source
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
+  // --- Process Mutual Funds ---
+  console.log("\n--- Processing Mutual Funds ---");
+  const mutualFunds = await MutualFund.find();
+  for (let i = 0; i < mutualFunds.length; i++) {
+    const fund = mutualFunds[i];
+    const historicalNav = await fetchHistoricalNav(fund.scheme_code);
+    if (historicalNav) {
+      await storeHistoricalNav(fund._id, fund.name, historicalNav);
     }
-    console.log("Finished processing all Companies.");
-  } catch (error) {
-    console.error(
-      "An unexpected error occurred during the main process:",
-      error
-    );
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+  console.log("Finished processing all Mutual Funds.");
+
+  // --- Process Stocks ---
+  console.log("\n--- Processing Stocks ---");
+  const companies = await Company.find();
+  for (let i = 0; i < companies.length; i++) {
+    const company = companies[i];
+    const historicalData = await fetchHistoricalData(company.symbol);
+    if (historicalData) {
+      await storeHistoricalData(company._id, company.symbol, historicalData);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  console.log("Finished processing all Stocks.");
 }
 
 run();

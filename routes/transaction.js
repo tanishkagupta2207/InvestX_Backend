@@ -1,542 +1,339 @@
 const express = require("express");
+const router = express.Router();
 const fetchUser = require("../middleware/fetchUser");
 const Transactions = require("../models/Transactions");
 const Company = require("../models/Company");
+const MutualFund = require("../models/MutualFund");
 const Portfolio = require("../models/Portfolio");
 const User = require("../models/User");
-const UserStocks = require("../models/UserStocks");
+const UserHoldings = require("../models/UserHolding");
 const Orders = require("../models/Orders");
 
-const router = express.Router();
+// --- UTILITY: TRADING HOURS CHECK ---
+const checkTradingHours = (now) => {
+    // Current logic check: Mon (1) to Fri (5), adjusted for your 'day behind' logic (2 to 6)
+    // If running on a Monday (1) the market day check is wrong based on your '2 to 6' logic.
+    // For simplicity and to follow your provided logic:
+    const hour = now.getHours();
+    const day = now.getDay();
+    // Assuming your market is open Tuesday (2) to Saturday (6) based on your original comment
+    const isMarketDay = day >= 2 && day <= 6;
+    // Market hours: 4:00 AM (4) to 8:00 PM (20)
+    const isMarketOpenTime =
+        (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
+        (hour < 20 || (hour === 20 && now.getMinutes() === 0));
+
+    return isMarketDay && isMarketOpenTime;
+};
+
+// =========================================================================
+//                             TRANSACTIONS ROUTE
+// =========================================================================
 
 router.post("/fetch", fetchUser, async (req, res) => {
-  let success = false;
-  
-  const {action} = req.body;
-  // Validate action
-  if (action && (action !== "Buy" && action !== "Sell")) {
-    return res.status(400).json({
-      success,
-      msg: "Invalid action. Must be 'Buy' or 'Sell'.",
-    });
-  }
-
-  try {
-    const userId = req.user.id;
-
-    const queryConditions = { user_id: userId };
-
-    if (action) {
-      queryConditions.action = action; // Filter by action if provided
+    let success = false;
+    const { action } = req.body;
+    
+    if (action && (action !== "Buy" && action !== "Sell")) {
+        return res.status(400).json({ success, msg: "Invalid action. Must be 'Buy' or 'Sell'." });
     }
 
-    const transactions = await Transactions.find(queryConditions).lean();
-
-    // Fetching company for each transaction
-    for (let transaction of transactions) {
-      const company = await Company.findById(transaction.company_id);
-      if (company) {
-        transaction.company = company.name;
-      } else {
-        transaction.company = "Unknown";
-      }
-    }
-    success = true;
-    res.json({ success, transactions });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success, msg: "Internal error" });
-  }
-});
-
-// POST route for market orders
-router.post("/market", fetchUser, async (req, res) => {
-  const { quantity, price, action, companyId } = req.body;
-  const userId = req.user.id;
-  const quantityNum = parseInt(req.body.quantity, 10);
-
-  if (!quantityNum || !price || !action || !companyId) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing required fields" });
-  }
-
-  //check for trading hours
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketDay = now.getDay() >= 2 && now.getDay() <= 6; //one day behind schedule
-  // Market hours: 4:00 AM (4) to 8:00 PM (20)
-  const isMarketOpenTime =
-    (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
-    (hour < 20 || (hour === 20 && now.getMinutes() === 0));
-
-  if (!(isMarketDay && isMarketOpenTime)) {
-    return res.status(400).json({
-      success: false,
-      msg: "Action not allowed during non market hours.",
-    });
-  }
-
-  let amountToAdd = quantityNum * price;
-  if (action === "BUY") {
-    amountToAdd *= -1;
-  }
-  try {
-    //user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    // portfolio
-    const portfolio = await Portfolio.findOne({ user_id: userId });
-    if (!portfolio) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-    const userStock = await UserStocks.findOne({
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-    });
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, Company not registered",
-      });
-    }
-
-    // basic checks if needed balance present or not, sellable quantity of stock
-    if (action === "SELL") {
-      if (!userStock || userStock.quantity < quantityNum) {
-        return res.status(400).json({
-          success: false,
-          msg: "Not enough quantity of shares to sell!",
-        });
-      }
-    } else {
-      if (user.balance + amountToAdd < 0) {
-        return res
-          .status(400)
-          .json({ success: false, msg: "Not enough balance!" });
-      }
-    }
-    now.setDate(now.getDate() - 1);
-    const updation_time = new Date();
-    //transaction mei will save
-    const transaction = await Transactions.create({
-      user_id: userId,
-      company_id: companyId,
-      action: action === "BUY" ? "Buy" : "Sell",
-      trade_price: price,
-      quantity: quantityNum,
-      date: updation_time,
-    });
-
-    //create an order
-    const order = await Orders.create({
-      user_id: userId,
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-      order_type: action === "BUY" ? "Buy" : "Sell",
-      order_sub_type: "MARKET",
-      quantity: quantityNum,
-      price: price,
-      filled_quantity: quantityNum,
-      average_fill_price: price,
-      status: "FILLED",
-      order_updation_date: updation_time,
-      date: now,
-    });
-
-    // update user balance
-    user.balance += amountToAdd;
-    const updatedUser = await user.save();
-
-    //userStocks mei will go and average price update
-    if (userStock) {
-      if (action === "BUY") {
-        const oldTotal = userStock.average_price * userStock.quantity;
-        const total = oldTotal - amountToAdd;
-        userStock.quantity += quantityNum;
-        userStock.average_price = total / userStock.quantity;
-        const updatedUserStock = await userStock.save();
-      } else {
-        userStock.quantity -= quantityNum;
-        if (userStock.quantity === 0) {
-          await UserStocks.deleteOne({ _id: userStock._id });
-        } else {
-          const updatedUserStock = await userStock.save();
+    try {
+        const userId = req.user.id;
+        const queryConditions = { user_id: userId };
+        if (action) {
+            queryConditions.action = action;
         }
-      }
-    } else {
-      const updatedUserStock = await UserStocks.create({
-        portfolio_id: portfolio._id,
-        company_id: companyId,
-        quantity: quantityNum,
-        average_price: price,
-      });
+
+        const transactions = await Transactions.find(queryConditions).lean();
+        const securityIds = [...new Set(transactions.map(t => t.security_id))];
+
+        // Fetch details for all involved securities
+        const companies = await Company.find({ _id: { $in: securityIds } }, 'name _id').lean();
+        const mutualFunds = await MutualFund.find({ _id: { $in: securityIds } }, 'name _id').lean();
+
+        const securityMap = [
+            ...companies.map(c => ({ id: c._id, name: c.name })),
+            ...mutualFunds.map(m => ({ id: m._id, name: m.name })),
+        ].reduce((map, sec) => {
+            map[sec.id] = sec.name;
+            return map;
+        }, {});
+
+        // Map security name to each transaction
+        const transactionsWithNames = transactions.map(t => ({
+            ...t,
+            security_name: securityMap[t.security_id] || "Unknown",
+        }));
+
+        success = true;
+        res.json({ success, transactions: transactionsWithNames });
+    } catch (error) {
+        console.error("Error fetching transactions:", error.message);
+        res.status(500).json({ success, msg: "Internal error" });
     }
-    res.status(201).json({
-      success: true,
-      msg: "Order placed successfully",
-    });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success: false, msg: "Internal error" });
-  }
 });
 
-// POST route for limit orders
+// =========================================================================
+//                              STOCK ORDER ROUTES
+// =========================================================================
+
+// POST route for Market Orders (Stocks)
+router.post("/market", fetchUser, async (req, res) => {
+    const { quantity, price, action, security_id } = req.body; // Using security_id for consistency
+    const userId = req.user.id;
+    const quantityNum = parseInt(quantity, 10);
+    const security_type = 'company';
+
+    if (!quantityNum || !price || !action || !security_id) {
+        return res.status(400).json({ success: false, msg: "Missing required fields" });
+    }
+
+    const now = new Date();
+    if (!checkTradingHours(now)) {
+        return res.status(400).json({ success: false, msg: "Action not allowed during non-market hours." });
+    }
+
+    let amountToAdd = quantityNum * price;
+    if (action === "BUY") {
+        amountToAdd *= -1;
+    }
+
+    try {
+        const user = await User.findById(userId);
+        const portfolio = await Portfolio.findOne({ user_id: userId });
+        const company = await Company.findById(security_id);
+
+        if (!user || !portfolio || !company) {
+            return res.status(400).json({ success: false, msg: "User/Portfolio/Company not found." });
+        }
+
+        const userHolding = await UserHoldings.findOne({
+            portfolio_id: portfolio._id,
+            security_id: security_id,
+            security_type: security_type,
+        });
+
+        // Basic checks for balance/holdings
+        if (action === "SELL") {
+            if (!userHolding || userHolding.quantity < quantityNum) {
+                return res.status(400).json({ success: false, msg: "Not enough quantity of shares to sell!" });
+            }
+        } else {
+            if (user.balance + amountToAdd < 0) {
+                return res.status(400).json({ success: false, msg: "Not enough balance!" });
+            }
+        }
+
+        const updation_time = new Date(); // Use current date only
+
+        // Transaction
+        await Transactions.create({
+            user_id: userId,
+            security_id: security_id,
+            security_type: security_type,
+            action: action === "BUY" ? "Buy" : "Sell",
+            trade_price: price,
+            quantity: quantityNum,
+            date: updation_time,
+        });
+
+        // Order (FILLED status since it's a market order)
+        await Orders.create({
+            user_id: userId,
+            portfolio_id: portfolio._id,
+            security_id: security_id,
+            security_type: security_type,
+            order_type: action === "BUY" ? "Buy" : "Sell",
+            order_sub_type: "MARKET",
+            quantity: quantityNum,
+            price: price,
+            filled_quantity: quantityNum,
+            average_fill_price: price,
+            status: "FILLED",
+            order_updation_date: updation_time,
+            date: updation_time,
+        });
+
+        // Update user balance
+        user.balance += amountToAdd;
+        await user.save();
+
+        // Update user holdings logic... (Same as your original logic, using UserHoldings)
+        if (userHolding) {
+            if (action === "BUY") {
+                const oldTotal = userHolding.average_price * userHolding.quantity;
+                const total = oldTotal - amountToAdd; // AmountToAdd is negative here
+                userHolding.quantity += quantityNum;
+                userHolding.average_price = total / userHolding.quantity;
+                await userHolding.save();
+            } else {
+                userHolding.quantity -= quantityNum;
+                if (userHolding.quantity === 0) {
+                    await UserHoldings.deleteOne({ _id: userHolding._id });
+                } else {
+                    await userHolding.save();
+                }
+            }
+        } else if (action === "BUY") {
+            await UserHoldings.create({
+                portfolio_id: portfolio._id,
+                security_id: security_id,
+                security_type: security_type,
+                quantity: quantityNum,
+                average_price: price,
+            });
+        }
+
+        res.status(201).json({ success: true, msg: "Market Order placed and executed successfully" });
+    } catch (error) {
+        console.error("Error processing market order:", error.message);
+        res.status(500).json({ success: false, msg: "Internal error" });
+    }
+});
+
+// Function to create PENDING Stock Order (for Limit, Stop Loss, etc.)
+const createPendingStockOrder = async (req, res, orderSubType, additionalFields = {}) => {
+    const { quantity, action, security_id, time_in_force } = req.body;
+    const userId = req.user.id;
+    const quantityNum = parseInt(quantity, 10);
+    const security_type = 'company';
+
+    if (!quantityNum || !action || !security_id || !time_in_force || Object.values(additionalFields).some(val => !val)) {
+        return res.status(400).json({ success: false, msg: "Missing required fields" });
+    }
+
+    // if (!checkTradingHours(new Date())) {
+    //     return res.status(400).json({ success: false, msg: "Orders can't be placed during non-market hours." });
+    // }
+
+    try {
+        const user = await User.findById(userId);
+        const portfolio = await Portfolio.findOne({ user_id: userId });
+        const company = await Company.findById(security_id);
+
+        if (!user || !portfolio || !company) {
+            return res.status(400).json({ success: false, msg: "User/Portfolio/Company not found." });
+        }
+
+        // Create PENDING Order
+        await Orders.create({
+            user_id: userId,
+            portfolio_id: portfolio._id,
+            security_id: security_id,
+            security_type: security_type,
+            order_type: action === "BUY" ? "Buy" : "Sell",
+            order_sub_type: orderSubType,
+            quantity: quantityNum,
+            status: "PENDING",
+            time_in_force: time_in_force,
+            date: new Date(), // Use current date only
+            ...additionalFields,
+        });
+
+        res.status(201).json({ success: true, msg: `${orderSubType} Order placed successfully (PENDING).` });
+    } catch (error) {
+        console.error(`Error placing ${orderSubType} order:`, error.message);
+        res.status(500).json({ success: false, msg: "Internal error" });
+    }
+};
+
+// POST route for Limit Orders (Stocks)
 router.post("/limit", fetchUser, async (req, res) => {
-  const { quantity, limit_price, action, companyId, time_in_force } = req.body;
-  const userId = req.user.id;
-  const quantityNum = parseInt(req.body.quantity, 10);
-
-  if (!quantityNum || !limit_price || !action || !companyId || !time_in_force) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing required fields" });
-  }
-
-  //check for trading hours
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketDay = now.getDay() >= 2 && now.getDay() <= 6; //one day behind schedule
-  // Market hours: 4:00 AM (4) to 8:00 PM (20)
-  const isMarketOpenTime =
-    (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
-    (hour < 20 || (hour === 20 && now.getMinutes() === 0));
-
-  if (!(isMarketDay && isMarketOpenTime)) {
-    return res.status(400).json({
-      success: false,
-      msg: "Orders can't be placed during non market hours.",
-    });
-  }
-
-  try {
-    //user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    // portfolio
-    const portfolio = await Portfolio.findOne({ user_id: userId });
-    if (!portfolio) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, Company not registered",
-      });
-    }
-
-    now.setDate(now.getDate() - 1);
-
-    //create an order
-    const order = await Orders.create({
-      user_id: userId,
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-      order_type: action === "BUY" ? "Buy" : "Sell",
-      order_sub_type: "LIMIT",
-      quantity: quantityNum,
-      limit_price: limit_price,
-      status: "PENDING",
-      time_in_force: time_in_force,
-      date: now,
-    });
-
-    res.status(201).json({
-      success: true,
-      msg: "Order placed successfully",
-    });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success: false, msg: "Internal error" });
-  }
+    const { limit_price } = req.body;
+    await createPendingStockOrder(req, res, "LIMIT", { limit_price });
 });
 
-// POST route for stop loss orders
+// POST route for Stop Loss Orders (Stocks)
 router.post("/stopLoss", fetchUser, async (req, res) => {
-  const { quantity, stop_price, action, companyId, time_in_force } = req.body;
-  const userId = req.user.id;
-  const quantityNum = parseInt(req.body.quantity, 10);
-
-  if (!quantityNum || !stop_price || !action || !companyId || !time_in_force) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing required fields" });
-  }
-
-  //check for trading hours
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketDay = now.getDay() >= 2 && now.getDay() <= 6; //one day behind schedule
-  // Market hours: 4:00 AM (4) to 8:00 PM (20)
-  const isMarketOpenTime =
-    (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
-    (hour < 20 || (hour === 20 && now.getMinutes() === 0));
-
-  if (!(isMarketDay && isMarketOpenTime)) {
-    return res.status(400).json({
-      success: false,
-      msg: "Orders can't be placed during non market hours.",
-    });
-  }
-
-  try {
-    //user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    // portfolio
-    const portfolio = await Portfolio.findOne({ user_id: userId });
-    if (!portfolio) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, Company not registered",
-      });
-    }
-
-    now.setDate(now.getDate() - 1);
-
-    //create an order
-    const order = await Orders.create({
-      user_id: userId,
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-      order_type: action === "BUY" ? "Buy" : "Sell",
-      order_sub_type: "STOP_LOSS",
-      quantity: quantityNum,
-      stop_price: stop_price,
-      status: "PENDING",
-      time_in_force: time_in_force,
-      date: now,
-    });
-
-    res.status(201).json({
-      success: true,
-      msg: "Order placed successfully",
-    });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success: false, msg: "Internal error" });
-  }
+    const { stop_price } = req.body;
+    await createPendingStockOrder(req, res, "STOP_LOSS", { stop_price });
 });
 
-// POST route for stop limit orders
+// POST route for Stop Limit Orders (Stocks)
 router.post("/stopLimit", fetchUser, async (req, res) => {
-  const {
-    quantity,
-    stop_price,
-    limit_price,
-    action,
-    companyId,
-    time_in_force,
-  } = req.body;
-  const userId = req.user.id;
-  const quantityNum = parseInt(req.body.quantity, 10);
-
-  if (
-    !quantityNum ||
-    !stop_price ||
-    !limit_price ||
-    !action ||
-    !companyId ||
-    !time_in_force
-  ) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing required fields" });
-  }
-
-  //check for trading hours
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketDay = now.getDay() >= 2 && now.getDay() <= 6; //one day behind schedule
-  // Market hours: 4:00 AM (4) to 8:00 PM (20)
-  const isMarketOpenTime =
-    (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
-    (hour < 20 || (hour === 20 && now.getMinutes() === 0));
-
-  if (!(isMarketDay && isMarketOpenTime)) {
-    return res.status(400).json({
-      success: false,
-      msg: "Orders can't be placed during non market hours.",
-    });
-  }
-
-  try {
-    //user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    // portfolio
-    const portfolio = await Portfolio.findOne({ user_id: userId });
-    if (!portfolio) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
-    }
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, Company not registered",
-      });
-    }
-
-    now.setDate(now.getDate() - 1);
-
-    //create an order
-    const order = await Orders.create({
-      user_id: userId,
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-      order_type: action === "BUY" ? "Buy" : "Sell",
-      order_sub_type: "STOP_LIMIT",
-      quantity: quantityNum,
-      stop_price: stop_price,
-      limit_price: limit_price,
-      status: "PENDING",
-      time_in_force: time_in_force,
-      date: now,
-    });
-
-    res.status(201).json({
-      success: true,
-      msg: "Order placed successfully",
-    });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success: false, msg: "Internal error" });
-  }
+    const { stop_price, limit_price } = req.body;
+    await createPendingStockOrder(req, res, "STOP_LIMIT", { stop_price, limit_price });
 });
 
-// POST route for stop limit orders
+// POST route for Take Profit Orders (Stocks)
 router.post("/takeProfit", fetchUser, async (req, res) => {
-  const { quantity, take_profit_price, action, companyId, time_in_force } =
-    req.body;
-  const userId = req.user.id;
-  const quantityNum = parseInt(req.body.quantity, 10);
+    const { take_profit_price } = req.body;
+    await createPendingStockOrder(req, res, "TAKE_PROFIT", { take_profit_price });
+});
 
-  if (
-    !quantityNum ||
-    !take_profit_price ||
-    !action ||
-    !companyId ||
-    !time_in_force
-  ) {
-    return res
-      .status(400)
-      .json({ success: false, msg: "Missing required fields" });
-  }
 
-  //check for trading hours
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketDay = now.getDay() >= 2 && now.getDay() <= 6; //one day behind schedule
-  // Market hours: 4:00 AM (4) to 8:00 PM (20)
-  const isMarketOpenTime =
-    (hour > 4 || (hour === 4 && now.getMinutes() >= 0)) &&
-    (hour < 20 || (hour === 20 && now.getMinutes() === 0));
+// =========================================================================
+//                           MUTUAL FUND ORDER ROUTES
+// =========================================================================
 
-  if (!(isMarketDay && isMarketOpenTime)) {
-    return res.status(400).json({
-      success: false,
-      msg: "Orders can't be placed during non market hours.",
-    });
-  }
+// Function to create Mutual Fund Order (Market, SIP, SWP)
+const createMutualFundOrder = async (req, res, orderSubType) => {
+    const { quantity, action, security_id, frequency } = req.body;
+    const userId = req.user.id;
+    const quantityNum = parseInt(quantity, 10);
+    const security_type = 'mutualfund';
 
-  try {
-    //user
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
+    // Market orders do not require frequency, SIP/SWP do
+    if (!quantityNum || !action || !security_id || ((orderSubType === "SIP" || orderSubType === "SWP") && !frequency)) {
+        return res.status(400).json({ success: false, msg: "Missing required fields" });
     }
 
-    // portfolio
-    const portfolio = await Portfolio.findOne({ user_id: userId });
-    if (!portfolio) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, User not registered",
-      });
+    // Mutual fund orders are always accepted as they are processed after market close, 
+    // but we can reject if outside a reasonable window if you wish.
+    // For now, we'll allow placement at any time, as processing is scheduled.
+
+    try {
+        const user = await User.findById(userId);
+        const portfolio = await Portfolio.findOne({ user_id: userId });
+        const fund = await MutualFund.findById(security_id);
+
+        if (!user || !portfolio || !fund) {
+            return res.status(400).json({ success: false, msg: "User/Portfolio/Mutual Fund not found." });
+        }
+        
+        // Final check: Mutual Funds only accept Buy/Sell (Market)
+        if (orderSubType === "MARKET" && action !== "BUY" && action !== "SELL") {
+             return res.status(400).json({ success: false, msg: "Invalid action for Mutual Fund Market Order." });
+        }
+        // SIP/SWP are always PENDING until the scheduler runs
+        const status = (orderSubType === "MARKET") ? "PENDING" : "PENDING"; 
+
+        // Create Order
+        await Orders.create({
+            user_id: userId,
+            portfolio_id: portfolio._id,
+            security_id: security_id,
+            security_type: security_type,
+            order_type: action === "BUY" ? "Buy" : "Sell",
+            order_sub_type: orderSubType,
+            quantity: quantityNum,
+            status: status,
+            time_in_force: "GTC", // Mutual fund orders are often GTC in spirit
+            frequency: frequency, // Only for SIP/SWP
+            date: new Date(),
+        });
+
+        res.status(201).json({ success: true, msg: `${orderSubType} Order placed successfully (PENDING for next NAV).` });
+    } catch (error) {
+        console.error(`Error placing ${orderSubType} order:`, error.message);
+        res.status(500).json({ success: false, msg: "Internal error" });
     }
+};
 
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(400).json({
-        success: false,
-        msg: "Action not allowed, Company not registered",
-      });
-    }
+// POST route for Mutual Fund Market Order
+router.post("/mf/market", fetchUser, async (req, res) => {
+    await createMutualFundOrder(req, res, "MARKET");
+});
 
-    now.setDate(now.getDate() - 1);
+// POST route for SIP Order
+router.post("/mf/sip", fetchUser, async (req, res) => {
+    await createMutualFundOrder(req, res, "SIP");
+});
 
-    //create an order
-    const order = await Orders.create({
-      user_id: userId,
-      portfolio_id: portfolio._id,
-      company_id: companyId,
-      order_type: action === "BUY" ? "Buy" : "Sell",
-      order_sub_type: "TAKE_PROFIT",
-      quantity: quantityNum,
-      take_profit_price: take_profit_price,
-      status: "PENDING",
-      time_in_force: time_in_force,
-      date: now,
-    });
-
-    res.status(201).json({
-      success: true,
-      msg: "Order placed successfully",
-    });
-  } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ success: false, msg: "Internal error" });
-  }
+// POST route for SWP Order
+router.post("/mf/swp", fetchUser, async (req, res) => {
+    await createMutualFundOrder(req, res, "SWP");
 });
 
 module.exports = router;
