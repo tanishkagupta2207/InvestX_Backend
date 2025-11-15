@@ -55,7 +55,7 @@ async function getTodayHistoricalSecurityPricesFromDB(
 
 // done
 async function updateMutualOrderStatusInDB(order, nav, updationDate) {
-  const {
+  let {
     quantity,
     order_type,
     security_id,
@@ -591,7 +591,7 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
       }
     } else {
       console.log(
-        `Could not fetch historical prices for ${companyId} for order ${order_id}`
+        `Could not fetch historical prices for ${security_id} for order ${order_id}`
       );
     }
   } catch (error) {
@@ -649,7 +649,7 @@ async function fetchAndStoreDailyNav() {
       );
       const navData = response.data.data;
       if (navData && navData.length > 0) {
-        const latestNavData = navData;
+        const latestNavData = navData[0];
         documentsToInsert.push({
           security_id: fund._id,
           security_type: "mutualfund",
@@ -694,9 +694,10 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
     const day = String(yesterday.getDate()).padStart(2, "0");
     const yesterdayFormatted = `${year}-${month}-${day}`;
 
-    console.log(`Workspaceing data for: ${yesterdayFormatted}`);
+    console.log(`Fetching 1-min data for: ${symbol} for ${yesterdayFormatted}`);
     const functionParam = "TIME_SERIES_INTRADAY";
 
+    // ... (axios options remain the same) ...
     const options = {
       method: "GET",
       url: RAPIDAPI_BASE_URL_INTRADAY,
@@ -705,7 +706,7 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
         function: functionParam,
         symbol: symbol,
         interval: INTRADAY_INTERVAL,
-        outputsize: "full", // Fetch all available intraday data for yesterday
+        outputsize: "full",
       },
       headers: {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
@@ -715,6 +716,7 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
 
     const response = await axios.request(options);
     const data = response.data;
+    let storedCount = 0; // Initialize counter
 
     if (data && data[`Time Series (${INTRADAY_INTERVAL})`]) {
       const timeSeries = data[`Time Series (${INTRADAY_INTERVAL})`];
@@ -732,22 +734,39 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
 
         // Ensure the data point is from yesterday
         if (timestampDateFormatted === yesterdayFormatted) {
-          const newStockData = new Securities({
+          
+          const securityDate = getSimulatedNextDate(timestampDate); // The final date to store
+          
+          const updateData = {
             security_id: company_id,
             security_type: "company",
-            date: getSimulatedNextDate(timestampDate),
+            date: securityDate,
             open_price: parseFloat(intradayData["1. open"]),
             high_price: parseFloat(intradayData["2. high"]),
             low_price: parseFloat(intradayData["3. low"]),
             close_price: parseFloat(intradayData["4. close"]),
             volume: parseInt(intradayData["5. volume"]),
             granularity: "1min",
-          });
-          await newStockData.save();
+          };
+
+          // *** FIX: Use updateOne with upsert: true ***
+          const result = await Securities.updateOne(
+            { // Filter (Unique Key)
+              security_id: company_id, 
+              date: securityDate, 
+              granularity: "1min" 
+            },
+            { $set: updateData }, // Data to set
+            { upsert: true } // Insert if not found
+          );
+          
+          if (result.upsertedId || result.modifiedCount > 0) {
+              storedCount++;
+          }
         }
       }
       console.log(
-        `Workspaceed and stored 1-min data for ${symbol} for yesterday (${yesterdayFormatted})`
+        `Successfully upserted ${storedCount} 1-min data points for ${symbol} for yesterday (${yesterdayFormatted})`
       );
     } else if (data && data.Note) {
       console.warn(`Alpha Vantage API Note for ${symbol}: ${data.Note}`);
@@ -1021,14 +1040,16 @@ async function fetchCompaniesDataFiveMinuteData() {
   console.log(`Workspaced 5min data for all Companies successfully`);
 }
 
+// Start the run after atleast 6AM IST 
+
 // --- Scheduler for orders ---
-cron.schedule("20 10 * * *", fetchUsersAndFulfillOrders); // run everday after market close
+cron.schedule("53 1 * * *", fetchUsersAndFulfillOrders); // run everday after market close
 
 // Schedule for stocks data fetching and aggregation
-cron.schedule("30 18 * * *", fetchAndStoreDailyNav); // e.g., run at 6:30 PM
-cron.schedule("45 10 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
-cron.schedule("15 10 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
-cron.schedule("35 10 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
-cron.schedule("10 10 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
-cron.schedule("13 10 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
-cron.schedule("16 10 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)
+cron.schedule("51 0 * * *", fetchAndStoreDailyNav); //(5 mins) e.g., run at 6:30 PM
+cron.schedule("55 0 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
+cron.schedule("20 01 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
+cron.schedule("22 01 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
+cron.schedule("47 01 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
+cron.schedule("49 01 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
+cron.schedule("51 01 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)

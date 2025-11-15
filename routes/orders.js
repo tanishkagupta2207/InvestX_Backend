@@ -7,7 +7,7 @@ const fetchUser = require("../middleware/fetchUser");
 // Data Fetching API Endpoint
 router.post("/fetch", fetchUser, async (req, res) => {
     let success = false;
-    // Extract filter parameters from the request body, including the new security_type
+    // Extract filter parameters
     const { order_type, order_sub_type, status, time_in_force, security_type } = req.body;
 
     try {
@@ -28,11 +28,10 @@ router.post("/fetch", fetchUser, async (req, res) => {
             queryConditions.time_in_force = time_in_force;
         }
         if (security_type) {
-            // Ensure the provided security_type is valid based on your schema
             if (security_type === 'company' || security_type === 'mutualfund') {
                 queryConditions.security_type = security_type;
             } else {
-                 return res.status(400).json({ success: false, msg: "Invalid security_type filter. Must be 'company' or 'mutualfund'." });
+                return res.status(400).json({ success: false, msg: "Invalid security_type filter. Must be 'company' or 'mutualfund'." });
             }
         }
 
@@ -43,30 +42,39 @@ router.post("/fetch", fetchUser, async (req, res) => {
         }
 
         // --- 2. Efficiently Fetch Security Details ---
-        const companyIds = orders.filter(o => o.security_type === 'company').map(o => o.security_id);
-        const mutualFundIds = orders.filter(o => o.security_type === 'mutualfund').map(o => o.security_id);
+        // Get unique, stringified IDs from orders for lookup
+        const companyIds = orders
+            .filter(o => o.security_type === 'company')
+            .map(o => o.security_id);
+        const mutualFundIds = orders
+            .filter(o => o.security_type === 'mutualfund')
+            .map(o => o.security_id);
 
         // Fetch all necessary security details in parallel
         const [companies, mutualFunds] = await Promise.all([
+            // Select the name, symbol, and _id fields
             Company.find({ _id: { $in: companyIds } }, 'name symbol _id').lean(),
-            MutualFund.find({ _id: { $in: mutualFundIds } }, 'name _id').lean()
+            MutualFund.find({ _id: { $in: mutualFundIds } }, 'name fund_house _id ').lean()
         ]);
 
-        // Create a single map for quick lookup: { 'security_id': { name: '...', symbol: '...' } }
+        // Create a single map for quick lookup: { 'security_id_string': { name: '...', identifier: '...' } }
         const securityMap = new Map();
         
-        companies.forEach(c => securityMap.set(c._id, { name: c.name, identifier: c.symbol }));
-        mutualFunds.forEach(mf => securityMap.set(mf._id, { name: mf.name, identifier: 'Mutual Fund' }));
+        // Populate map: Use toString() to ensure the ObjectId key is stored as a string
+        companies.forEach(c => securityMap.set(c._id.toString(), { name: c.name, identifier: c.symbol }));
+        mutualFunds.forEach(mf => securityMap.set(mf._id.toString(), { name: mf.name, identifier: mf.fund_house }));
 
         // --- 3. Map Details back to Orders ---
         const ordersWithDetails = orders.map(order => {
-            const details = securityMap.get(order.security_id);
+            // CRITICAL FIX: Use toString() on the ID from the order object when doing the lookup
+            const details = securityMap.get(order.security_id.toString());
             
             return {
                 ...order,
-                security_name: details ? details.name : 'Unknown Security',
+                // Map the fields used in your frontend component (OrderTable.jsx)
+                name: details ? details.name : 'Unknown Security',
                 security_identifier: details ? details.identifier : 'N/A',
-                security_id: order.security_id
+                security_id: order.security_id.toString() // Stringify for clean JSON output
             };
         });
 

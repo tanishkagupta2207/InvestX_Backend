@@ -252,9 +252,9 @@ const fetchAndFormatPortfolio = async (targetUserId) => {
     });
 
     // 5. Calculate XIRR
-    const xirr = await calculateUserXIRR(targetUserId);
+    const xirrValue = await calculateUserXIRR(targetUserId);
 
-    return { stocks, mutualFunds, Balance: userBalance, xirr };
+    return { stocks, mutualFunds, Balance: userBalance, xirr: xirrValue === null ? 0 : xirrValue };
 };
 
 // --- API Routes ---
@@ -291,13 +291,8 @@ router.get("/:userId", async (req, res) => {
         }
 
         const responseData = await fetchAndFormatPortfolio(userId);
-        const publicData = {
-             stocks: responseData.stocks,
-             mutualFunds: responseData.mutualFunds,
-             xirr: responseData.xirr // Display XIRR as a performance metric
-        };
 
-        res.status(200).json({ success: true, data: publicData });
+        res.status(200).json({ success: true, data: responseData });
 
     } catch (error) {
         console.error("Error fetching public profile:", error);

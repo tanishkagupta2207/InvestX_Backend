@@ -115,7 +115,7 @@ router.get("/categories", fetchUser, async (req, res) => {
       const companyInfo = {
         symbol: company.symbol,
         name: company.name,
-        company_id: company._id.toString(),
+        security_id: company._id.toString(),
       };
       if (!groupedData[sector]) {
         groupedData[sector] = [];
