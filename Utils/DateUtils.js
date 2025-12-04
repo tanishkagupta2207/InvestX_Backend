@@ -1,4 +1,5 @@
 // dateUtils.js
+const { DateTime } = require("luxon");
 
 function getSimulatedPrevDate() {
     const today = new Date();
@@ -21,25 +22,27 @@ function getSimulatedPrevDate() {
     return simulatedDate;
 }
 
-function getSimulatedNextDate(date) {
-    const today = new Date(date);
-    const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    let simulatedDate = new Date(today);
+function getSimulatedNextDate(utcDate) {
+    // Convert UTC date to ET to determine the market day
+    const etDate = DateTime.fromJSDate(utcDate, { zone: "UTC" }).setZone("America/New_York");
+    const etDayOfWeek = etDate.weekday; // 1=Monday ... 7=Sunday
 
-    // If today is Saturday, the "simulated" next date is Monday
-    if (dayOfWeek === 6) {
-        simulatedDate.setDate(simulatedDate.getDate() + 2); // Go 2 days to Monday
-    }
-    // If today is Friday, the "simulated" next date is Monday
-    else if (dayOfWeek === 5) {
-        simulatedDate.setDate(simulatedDate.getDate() + 3); // Go 3 days to Monday
-    }
-    // For all other weekdays, the "simulated" date is tomorrow
-    else {
+    // Start with UTC date
+    const simulatedDate = new Date(utcDate);
+
+    // Apply weekend skipping based on ET day
+    if (etDayOfWeek === 5) {          // Friday → simulate Monday
+        simulatedDate.setDate(simulatedDate.getDate() + 3);
+    } else if (etDayOfWeek === 6) {   // Saturday → simulate Monday
+        simulatedDate.setDate(simulatedDate.getDate() + 2);
+    } else if (etDayOfWeek === 7) {   // Sunday → simulate Monday
+        simulatedDate.setDate(simulatedDate.getDate() + 1);
+    } else {                          // Monday–Thursday → next day
         simulatedDate.setDate(simulatedDate.getDate() + 1);
     }
 
     return simulatedDate;
 }
+
 
 module.exports = { getSimulatedPrevDate, getSimulatedNextDate };

@@ -59,7 +59,7 @@ const OrdersSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"],
+      enum: ["PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED", "CANCEL_REQUESTED"],
       default: "PENDING",
     },
     frequency: {

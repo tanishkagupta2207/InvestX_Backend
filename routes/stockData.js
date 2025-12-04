@@ -2,6 +2,7 @@ const router = require("express").Router();
 const Securities = require("../models/Securities");
 const Company = require("../models/Company");
 const fetchUser = require("../middleware/fetchUser");
+const { DateTime } = require("luxon");
 
 // Data Fetching API Endpoint
 router.post("/data", fetchUser, async (req, res) => {
@@ -15,24 +16,33 @@ router.post("/data", fetchUser, async (req, res) => {
   }
 
   try {
-    const start = new Date(); // today
-    let interval = "daily"; // Set the interval to daily
+    // 1. Get the current time in New York
+    const nowNY = DateTime.now().setZone("America/New_York");
+    
+    let startNY;
+    let interval = "daily";
+
+    // 2. Calculate the Start Date based on NY Time
     if (range === "1D") {
+      // Start of the CURRENT trading day in NY (00:00 ET)
+      // This ensures we get the full session regardless of IST time
+      startNY = nowNY.startOf("day"); 
       interval = "1min";
     } else if (range === "5D") {
-      start.setDate(start.getDate() - 4); // 4 days before today(total 5 days including today)
+      // Today + 4 previous days = 5 days total
+      startNY = nowNY.minus({ days: 4 }).startOf("day");
       interval = "5min";
     } else if (range === "1M") {
-      start.setMonth(start.getMonth() - 1); // 1 month before today
+      startNY = nowNY.minus({ months: 1 }).startOf("day");
       interval = "daily";
     } else if (range === "6M") {
-      start.setMonth(start.getMonth() - 6); // 6 months before end date
+      startNY = nowNY.minus({ months: 6 }).startOf("day");
       interval = "daily";
     } else if (range === "1Y") {
-      start.setFullYear(start.getFullYear() - 1); // 1 year before end date
+      startNY = nowNY.minus({ years: 1 }).startOf("day");
       interval = "daily";
     } else if (range === "2Y") {
-      start.setFullYear(start.getFullYear() - 2); // 2 year before end date
+      startNY = nowNY.minus({ years: 2 }).startOf("day");
       interval = "daily";
     } else {
       return res.status(400).json({
@@ -41,7 +51,11 @@ router.post("/data", fetchUser, async (req, res) => {
           "Invalid range parameter. Please use '1D', '5D', '1M', '6M', '1Y', or '2Y'.",
       });
     }
-    start.setHours(0, 0, 0, 0); // Set to start of the day
+
+    // 3. Convert the NY Start Time to a JS Date (UTC) for the DB Query
+    // MongoDB stores dates in UTC. valid startNY (e.g., 00:00 ET) 
+    // will be converted to the correct UTC timestamp (e.g., 05:00 UTC).
+    const start = startNY.toJSDate(); 
 
     const company = await Company.findOne({ _id: security_id });
     if (!company) {
@@ -54,6 +68,7 @@ router.post("/data", fetchUser, async (req, res) => {
       security_id: security_id,
       security_type: "company",
       granularity: interval,
+      // Query >= Start Date (UTC) and <= Now
       date: { $gte: start, $lte: new Date() },
     }).sort({ date: 1 });
 

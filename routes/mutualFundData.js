@@ -4,62 +4,71 @@ const MutualFund = require("../models/MutualFund");
 const fetchUser = require("../middleware/fetchUser");
 
 // --- 1. NAV Data Fetching API Endpoint (History) ---
+// --- 1. NAV Data Fetching API Endpoint (History) ---
 router.post("/data", fetchUser, async (req, res) => {
-    const { security_id, range } = req.body; 
+  const { security_id, range } = req.body;
 
-    if (!security_id || !range) {
+  if (!security_id || !range) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing required parameters: security_id, range",
+    });
+  }
+
+  try {
+    // 1. Get the current time in New York (Consistent with Stock Logic)
+    const nowNY = DateTime.now().setZone("America/New_York");
+    
+    let startNY;
+    const interval = "daily"; // Mutual funds are always daily in this context
+
+    // 2. Calculate the Start Date based on NY Time
+    // We use the same fluent API (.minus) as the stock logic
+    if (range === "1M") {
+      startNY = nowNY.minus({ months: 1 }).startOf("day");
+    } else if (range === "6M") {
+      startNY = nowNY.minus({ months: 6 }).startOf("day");
+    } else if (range === "1Y") {
+      startNY = nowNY.minus({ years: 1 }).startOf("day");
+    } else if (range === "2Y") {
+      startNY = nowNY.minus({ years: 2 }).startOf("day");
+    } else if (range === "3Y") {
+      startNY = nowNY.minus({ years: 3 }).startOf("day");
+    } else {
+      // Reject intraday ranges (1D, 5D) which are not applicable to MF history here
       return res.status(400).json({
         success: false,
-        error: "Missing required parameters: security_id, range",
+        error:
+          "Invalid range parameter for Mutual Fund. Please use '1M', '6M', '1Y', '2Y', or '3Y'.",
       });
     }
 
-    try {
-        const end = new Date(); 
-        let start = new Date(end); 
-        const interval = "daily";
+    // 3. Convert the NY Start Time to a JS Date (UTC) for the DB Query
+    const start = startNY.toJSDate();
 
-        // Calculate the start date based on the requested range
-        if (range === "1M") {
-          start.setMonth(start.getMonth() - 1);
-        } else if (range === "6M") {
-          start.setMonth(start.getMonth() - 6);
-        } else if (range === "1Y") {
-          start.setFullYear(start.getFullYear() - 1);
-        } else if (range === "2Y") {
-          start.setFullYear(start.getFullYear() - 2);
-        } else {
-          // Reject intraday ranges not applicable to mutual funds
-          return res.status(400).json({
-            success: false,
-            error:
-        	"Invalid range parameter for Mutual Fund. Please use '1M', '6M', '1Y', or '2Y'.",
-        });
-        }
-        start.setHours(0, 0, 0, 0); 
-
-        const mutualFund = await MutualFund.findOne({ _id: security_id });
-        if (!mutualFund) {
-          return res
-            .status(404)
-            .json({ success: false, error: "Mutual Fund not found" });
-        }
-
-        // Query the Securities collection for NAV data
-        const data = await Securities.find({
-          security_id: security_id,
-          security_type: "mutualfund", // Filter by mutualfund type
-          granularity: interval,
-          date: { $gte: start, $lte: end },
-        }).sort({ date: 1 });
-
-        res.json({ success: true, mutualFund: mutualFund, data });
-    } catch (error) {
-      console.error("Error fetching mutual fund NAV data by date range:", error);
-  	  res
-  	    .status(500)
-  	    .json({ success: false, error: "Failed to fetch mutual fund NAV data" });
+    const mutualFund = await MutualFund.findOne({ _id: security_id });
+    if (!mutualFund) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Mutual Fund not found" });
     }
+
+    // 4. Query the Securities collection
+    // Using $gte: start (UTC) matches the logic in stockData.js
+    const data = await Securities.find({
+      security_id: security_id,
+      security_type: "mutualfund",
+      granularity: interval,
+      date: { $gte: start, $lte: new Date() },
+    }).sort({ date: 1 });
+
+    res.json({ success: true, mutualFund: mutualFund, data });
+  } catch (error) {
+    console.error("Error fetching mutual fund NAV data by date range:", error);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch mutual fund NAV data" });
+  }
 });
 
 // --- 2. Mutual Fund Details and Latest NAV Endpoint ---

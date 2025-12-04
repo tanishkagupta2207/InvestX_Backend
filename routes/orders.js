@@ -86,4 +86,35 @@ router.post("/fetch", fetchUser, async (req, res) => {
     }
 });
 
+// POST /api/orders/cancel
+router.post("/cancel", fetchUser, async (req, res) => {
+  const { orderId } = req.body;
+
+  try {
+    const order = await Orders.findById(orderId);
+    if (!order) return res.status(404).json({ success: false, msg: "Order not found" });
+
+    if (order.user_id !== req.user.id) {
+      return res.status(401).json({ success: false, msg: "Not authorized" });
+    }
+
+    if (order.status !== "PENDING") {
+      return res.status(400).json({ success: false, msg: "Order already processed" });
+    }
+
+    order.status = "CANCEL_REQUESTED"; 
+    order.order_updation_date = new Date(); // Important: Capture WHEN they cancelled
+    await order.save();
+
+    return res.json({ 
+        success: true, 
+        msg: "Cancellation Requested. Status will be updated after daily settlement." 
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, msg: "Server Error" });
+  }
+});
+
 module.exports = router;

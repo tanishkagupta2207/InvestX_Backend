@@ -5,7 +5,7 @@ const MutualFund = require("../models/MutualFund");
 const Securities = require("../models/Securities");
 const connectToMongoDB = require("../dbConnect");
 const axios = require("axios");
-const {getSimulatedPrevDate, getSimulatedNextDate} = require("../utils/DateUtils");
+const { getSimulatedPrevDate } = require("../utils/DateUtils");
 
 // --- Date Calculation ---
 const simulatedDateToday = getSimulatedPrevDate();
@@ -47,53 +47,61 @@ async function fetchHistoricalData(symbol) {
 }
 
 // --- Data Fetching for Mutual Funds ---
-const MFAPI_BASE_URL =  process.env.REACT_APP_MFAPI_BASE_URL;
+const MFAPI_BASE_URL = process.env.REACT_APP_MFAPI_BASE_URL;
 
 // Function to fetch and filter historical NAV for a scheme
 async function fetchHistoricalNav(schemeCode) {
-    console.log(`Fetching all historical NAV for scheme code ${schemeCode}...`);
-    try {
-        const response = await axios.get(`${MFAPI_BASE_URL}${schemeCode}`);
-        const data = response.data;
+  console.log(`Fetching all historical NAV for scheme code ${schemeCode}...`);
+  try {
+    const response = await axios.get(`${MFAPI_BASE_URL}${schemeCode}`);
+    const data = response.data;
 
-        if (!data || !data.data) {
-            console.log("No data found in the API response.");
-            return [];
-        }
-
-        const allNavData = data.data;
-        const documentsToStore = [];
-        
-        // Calculate the cutoff date (2 years ago from today)
-        const cutoffDate = new Date(simulatedDateToday);
-        cutoffDate.setFullYear(simulatedDateToday.getFullYear() - 2);
-
-        console.log(`Filtering data after cutoff date: ${cutoffDate.toISOString().split('T')[0]}`);
-
-        // Iterate through the historical data and only select records within the last 2 years
-        for (const record of allNavData) {
-            // The date format is DD-MM-YYYY, so it needs to be reversed for the Date constructor
-            const recordDate = new Date(record.date.split('-').reverse().join('-'));
-
-            // If the record date is older than the cutoff date, stop processing
-            if (recordDate < cutoffDate) {
-                break;
-            }
-
-            // Otherwise, add the record to our list
-            documentsToStore.push({
-                date: recordDate,
-                nav: parseFloat(record.nav),
-            });
-        }
-        
-        console.log(`Filtered down to ${documentsToStore.length} records within the last 2 years.`);
-        return documentsToStore;
-
-    } catch (error) {
-        console.error(`Error fetching NAV for scheme code ${schemeCode}:`, error.message);
-        return null;
+    if (!data || !data.data) {
+      console.log("No data found in the API response.");
+      return [];
     }
+
+    const allNavData = data.data;
+    const documentsToStore = [];
+
+    // Calculate the cutoff date (2 years ago from today)
+    const cutoffDate = new Date(simulatedDateToday);
+    cutoffDate.setFullYear(simulatedDateToday.getFullYear() - 2);
+
+    console.log(
+      `Filtering data after cutoff date: ${
+        cutoffDate.toISOString().split("T")[0]
+      }`
+    );
+
+    // Iterate through the historical data and only select records within the last 2 years
+    for (const record of allNavData) {
+      // The date format is DD-MM-YYYY, so it needs to be reversed for the Date constructor
+      const recordDate = new Date(record.date.split("-").reverse().join("-"));
+
+      // If the record date is older than the cutoff date, stop processing
+      if (recordDate < cutoffDate) {
+        break;
+      }
+
+      // Otherwise, add the record to our list
+      documentsToStore.push({
+        date: recordDate,
+        nav: parseFloat(record.nav),
+      });
+    }
+
+    console.log(
+      `Filtered down to ${documentsToStore.length} records within the last 2 years.`
+    );
+    return documentsToStore;
+  } catch (error) {
+    console.error(
+      `Error fetching NAV for scheme code ${schemeCode}:`,
+      error.message
+    );
+    return null;
+  }
 }
 
 // --- Data Storage for Stocks ---
@@ -106,7 +114,13 @@ async function storeHistoricalData(securityId, symbol, data) {
   const documents = data.map((record) => ({
     security_id: securityId,
     security_type: "company",
-    date: getSimulatedNextDate(new Date(record.date)),
+    date: new Date(
+      Date.UTC(
+        new Date(record.date).getUTCFullYear(),
+        new Date(record.date).getUTCMonth(),
+        new Date(record.date).getUTCDate()
+      )
+    ),
     open_price: record.open,
     high_price: record.high,
     low_price: record.low,
@@ -139,38 +153,38 @@ async function storeHistoricalData(securityId, symbol, data) {
 
 // --- Data Storage for Mutual Funds ---
 async function storeHistoricalNav(securityId, name, data) {
-    if (!data || data.length === 0) {
-        console.log(`No data provided to store for ${name}.`);
-        return;
-    }
-    
-    // The documents are already in the correct format from fetchHistoricalNav
-    const documents = data.map((record) => ({
-        security_id: securityId,
-        security_type: "mutualfund",
-        date: getSimulatedNextDate(new Date(record.date)),
-        nav: record.nav,
-        granularity: "daily",
-    }));
+  if (!data || data.length === 0) {
+    console.log(`No data provided to store for ${name}.`);
+    return;
+  }
 
-    const bulkOps = documents.map((doc) => ({
-        updateOne: {
-            filter: { security_id: doc.security_id, date: doc.date },
-            update: { $set: doc },
-            upsert: true,
-        },
-    }));
+  // The documents are already in the correct format from fetchHistoricalNav
+  const documents = data.map((record) => ({
+    security_id: securityId,
+    security_type: "mutualfund",
+    date: new Date(record.date),
+    nav: record.nav,
+    granularity: "daily",
+  }));
 
-    try {
-        if (bulkOps.length > 0) {
-            const result = await Securities.bulkWrite(bulkOps);
-            console.log(
-                `Stored NAV data for ${name}. Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
-            );
-        }
-    } catch (error) {
-        console.error(`Error storing NAV data for ${name} in MongoDB:`, error);
+  const bulkOps = documents.map((doc) => ({
+    updateOne: {
+      filter: { security_id: doc.security_id, date: doc.date },
+      update: { $set: doc },
+      upsert: true,
+    },
+  }));
+
+  try {
+    if (bulkOps.length > 0) {
+      const result = await Securities.bulkWrite(bulkOps);
+      console.log(
+        `Stored NAV data for ${name}. Upserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}`
+      );
     }
+  } catch (error) {
+    console.error(`Error storing NAV data for ${name} in MongoDB:`, error);
+  }
 }
 
 // --- Main Execution ---

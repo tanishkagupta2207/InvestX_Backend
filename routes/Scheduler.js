@@ -9,6 +9,7 @@ const axios = require("axios");
 const Company = require("../models/Company");
 const MutualFund = require("../models/MutualFund"); // New import
 const mongoose = require("mongoose");
+const { DateTime } = require("luxon");
 const {
   getSimulatedPrevDate,
   getSimulatedNextDate,
@@ -22,7 +23,6 @@ const RAPIDAPI_BASE_URL_INTRADAY =
   process.env.REACT_APP_RAPIDAPI_BASE_URL_INTRADAY;
 const MFAPI_BASE_URL = process.env.REACT_APP_MFAPI_BASE_URL;
 
-// done
 async function getTodayHistoricalSecurityPricesFromDB(
   securityId,
   securityType,
@@ -53,7 +53,6 @@ async function getTodayHistoricalSecurityPricesFromDB(
   }
 }
 
-// done
 async function updateMutualOrderStatusInDB(order, nav, updationDate) {
   let {
     quantity,
@@ -161,9 +160,9 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
         nav * quantity) /
       totalFilled;
     if (order_sub_type === "MARKET") {
-      if(partialFill && quantity === 0){
+      if (partialFill && quantity === 0) {
         orderForUpdate.status = "REJECTED";
-      }else {
+      } else {
         orderForUpdate.status = partialFill ? "PARTIALLY_FILLED" : "FILLED";
       }
     }
@@ -218,7 +217,6 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
   }
 }
 
-// done
 async function fulfillMutualFundOrdersDaily(orderId) {
   try {
     const order = await Orders.findById(orderId);
@@ -234,6 +232,12 @@ async function fulfillMutualFundOrdersDaily(orderId) {
       date: { $lte: new Date() },
     }).sort({ date: -1 });
 
+    if (order.status === "CANCEL_REQUESTED" && !latestNavData) {
+      order.status = "CANCELLED"; // Confirm the cancellation
+      await order.save();
+      return;
+    }
+
     if (!latestNavData) {
       console.log(
         `No latest NAV data found for mutual fund ${order.security_id}`
@@ -241,39 +245,51 @@ async function fulfillMutualFundOrdersDaily(orderId) {
       return;
     }
 
-    const nav = latestNavData.nav;
-
-    await updateMutualOrderStatusInDB(order, nav, latestNavData.date);
+    if (order.status === "CANCEL_REQUESTED") {
+      if (latestNavData.date > order.order_updation_date) {
+        order.status = "CANCELLED"; // Confirm the cancellation
+        await order.save();
+        return;
+      } else {
+        const nav = latestNavData.nav;
+        await updateMutualOrderStatusInDB(order, nav, latestNavData.date);
+        // check order status after update
+        const updatedOrder = await Orders.findById(orderId);
+        if (updatedOrder.order_sub_type !== "MARKET") {
+          updatedOrder.status = "CANCELLED"; // Cancel future installments
+          await updatedOrder.save();
+        }
+      }
+    }
   } catch (error) {
     console.error("Error fulfilling mutual fund order:", error);
   }
 }
 
-// done
 async function updateOrderStatusInDB(order, price, updationDate) {
-  const { quantity, order_type, security_id, security_type, user_id } = order;
-  const action = order_type;
+  let { quantity, order_type, security_id, security_type, user_id } = order;
+  let action = order_type;
   try {
     let amountToAdd = quantity * price;
     if (action === "Buy") {
       amountToAdd *= -1;
     }
     //USER VALIDATION
-    const user = await User.findById(user_id);
+    let user = await User.findById(user_id);
     if (!user) {
       console.log(`User with ID ${user_id} not found.`);
       return;
     }
 
     // PORTFOLIO VALIDATION
-    const portfolio = await Portfolio.findOne({ user_id: user_id });
+    let portfolio = await Portfolio.findOne({ user_id: user_id });
     if (!portfolio) {
       console.log(`User portfolio for ID ${user_id} not found.`);
       return;
     }
 
     //ORDER VALIDATION
-    const orderForUpdate = await Orders.findById(order._id);
+    let orderForUpdate = await Orders.findById(order._id);
     if (!orderForUpdate) {
       console.log(`Order with ID ${order._id} not found.`);
       return;
@@ -377,7 +393,6 @@ async function updateOrderStatusInDB(order, price, updationDate) {
   }
 }
 
-// done
 async function fulfillStopLimitOrdersDaily(orderId) {
   try {
     const order = await Orders.findById(orderId);
@@ -399,6 +414,15 @@ async function fulfillStopLimitOrdersDaily(orderId) {
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       for (const pricePoint of historicalPrices) {
+        if (order.status === "CANCEL_REQUESTED") {
+          const priceTime = new Date(pricePoint.date); // Intraday timestamp
+          const cancelTime = new Date(order.order_updation_date);
+
+          // If the price candle is AFTER the user clicked cancel, ignore it and stop
+          if (priceTime > cancelTime) {
+            break;
+          }
+        }
         if (
           (order_type === "Buy" && pricePoint.high_price >= stop_price) ||
           (order_type === "Sell" && pricePoint.low_price <= stop_price)
@@ -413,10 +437,16 @@ async function fulfillStopLimitOrdersDaily(orderId) {
         order.order_updation_date = updation_date;
         await order.save();
         await fulfillLimitOrdersDaily(order_id);
-      } else if (order.time_in_force === "DAY") {
-        order.status = "REJECTED";
-        order.order_updation_date = updation_date;
-        await order.save();
+      } // It didn't fill. Now we decide: Reject (Day end) or Confirm Cancel?
+      else {
+        if (order.status === "CANCEL_REQUESTED") {
+          order.status = "CANCELLED"; // Confirm the cancellation
+          order.order_updation_date = new Date();
+          await order.save();
+        } else if (order.time_in_force === "DAY") {
+          order.status = "REJECTED";
+          await order.save();
+        }
       }
     } else {
       console.log(
@@ -428,7 +458,6 @@ async function fulfillStopLimitOrdersDaily(orderId) {
   }
 }
 
-//done
 async function fulfillLimitOrdersDaily(orderId) {
   try {
     const order = await Orders.findById(orderId);
@@ -449,8 +478,17 @@ async function fulfillLimitOrdersDaily(orderId) {
     if (historicalPrices && historicalPrices.length > 0) {
       let fulfilled = false;
       let price = 0;
-      const updationDate = new Date(); // Set the updation date to now
+      let updationDate = new Date(); // Set the updation date to now
       for (const pricePoint of historicalPrices) {
+        if (order.status === "CANCEL_REQUESTED") {
+          const priceTime = new Date(pricePoint.date); // Intraday timestamp
+          const cancelTime = new Date(order.order_updation_date);
+
+          // If the price candle is AFTER the user clicked cancel, ignore it and stop
+          if (priceTime > cancelTime) {
+            break;
+          }
+        }
         if (order_type === "Buy" && pricePoint.low_price <= limit_price) {
           price = pricePoint.low_price;
           fulfilled = true;
@@ -469,9 +507,13 @@ async function fulfillLimitOrdersDaily(orderId) {
       if (fulfilled) {
         await updateOrderStatusInDB(order, price, updationDate);
       } else {
-        if (order.time_in_force === "DAY") {
+        // It didn't fill. Now we decide: Reject (Day end) or Confirm Cancel?
+        if (order.status === "CANCEL_REQUESTED") {
+          order.status = "CANCELLED"; // Confirm the cancellation
+          order.order_updation_date = new Date();
+          await order.save();
+        } else if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
-          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -485,7 +527,6 @@ async function fulfillLimitOrdersDaily(orderId) {
   }
 }
 
-// done
 async function fulfillstopLossOrdersDaily(orderId) {
   try {
     const order = await Orders.findById(orderId);
@@ -508,6 +549,15 @@ async function fulfillstopLossOrdersDaily(orderId) {
       let price = 0;
       const updationDate = new Date(); // Set the updation date to now
       for (const pricePoint of historicalPrices) {
+        if (order.status === "CANCEL_REQUESTED") {
+          const priceTime = new Date(pricePoint.date); // Intraday timestamp
+          const cancelTime = new Date(order.order_updation_date);
+
+          // If the price candle is AFTER the user clicked cancel, ignore it and stop
+          if (priceTime > cancelTime) {
+            break;
+          }
+        }
         if (order_type === "Buy" && pricePoint.high_price >= stop_price) {
           price = pricePoint.low_price;
           fulfilled = true;
@@ -526,9 +576,13 @@ async function fulfillstopLossOrdersDaily(orderId) {
       if (fulfilled) {
         await updateOrderStatusInDB(order, price, updationDate);
       } else {
-        if (order.time_in_force === "DAY") {
+        // It didn't fill. Now we decide: Reject (Day end) or Confirm Cancel?
+        if (order.status === "CANCEL_REQUESTED") {
+          order.status = "CANCELLED"; // Confirm the cancellation
+          order.order_updation_date = new Date();
+          await order.save();
+        } else if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
-          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -542,7 +596,6 @@ async function fulfillstopLossOrdersDaily(orderId) {
   }
 }
 
-// done
 async function fulfillTakeProfitOrdersDaily(orderId) {
   try {
     const order = await Orders.findById(orderId);
@@ -565,6 +618,15 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
       let price = 0;
       const updationDate = new Date();
       for (const pricePoint of historicalPrices) {
+        if (order.status === "CANCEL_REQUESTED") {
+          const priceTime = new Date(pricePoint.date); // Intraday timestamp
+          const cancelTime = new Date(order.order_updation_date);
+
+          // If the price candle is AFTER the user clicked cancel, ignore it and stop
+          if (priceTime > cancelTime) {
+            break;
+          }
+        }
         if (order_type === "Buy" && pricePoint.low_price <= take_profit_price) {
           price = pricePoint.low_price;
           fulfilled = true;
@@ -583,9 +645,13 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
       if (fulfilled) {
         await updateOrderStatusInDB(order, price, updationDate);
       } else {
-        if (order.time_in_force === "DAY") {
+        // It didn't fill. Now we decide: Reject (Day end) or Confirm Cancel?
+        if (order.status === "CANCEL_REQUESTED") {
+          order.status = "CANCELLED"; // Confirm the cancellation
+          order.order_updation_date = new Date();
+          await order.save();
+        } else if (order.time_in_force === "DAY") {
           order.status = "REJECTED";
-          order.order_updation_date = updationDate;
           await order.save();
         }
       }
@@ -599,7 +665,6 @@ async function fulfillTakeProfitOrdersDaily(orderId) {
   }
 }
 
-// done
 async function fetchUsersAndFulfillOrders() {
   try {
     console.log("Running daily order check...");
@@ -609,9 +674,10 @@ async function fetchUsersAndFulfillOrders() {
       console.log(`Skipping order fulfillment on weekends.`);
       return;
     }
-    const pendingOrders = await Orders.find({ status: "PENDING" }).sort({
-      date: 1,
-    });
+    // In fetchUsersAndFulfillOrders() function
+    const pendingOrders = await Orders.find({
+      status: { $in: ["PENDING", "CANCEL_REQUESTED"] },
+    }).sort({ date: 1 });
     for (const order of pendingOrders) {
       const {
         _id: orderId,
@@ -638,7 +704,6 @@ async function fetchUsersAndFulfillOrders() {
   }
 }
 
-// done
 async function fetchAndStoreDailyNav() {
   try {
     const mutualFunds = await MutualFund.find(); // Fetch all mutual funds from the database
@@ -682,7 +747,6 @@ async function fetchAndStoreDailyNav() {
   }
 }
 
-// done
 async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
   const INTRADAY_INTERVAL = "1min";
   try {
@@ -722,21 +786,22 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
       const timeSeries = data[`Time Series (${INTRADAY_INTERVAL})`];
 
       for (const timestampStr in timeSeries) {
-        const intradayData = timeSeries[timestampStr];
-        const timestampDate = new Date(timestampStr);
-        const timestampYear = timestampDate.getFullYear();
-        const timestampMonth = String(timestampDate.getMonth() + 1).padStart(
-          2,
-          "0"
+
+        // 1. Parse the string as New York Time explicitly
+        const nyTime = DateTime.fromFormat(
+          timestampStr,
+          "yyyy-MM-dd HH:mm:ss",
+          { zone: "America/New_York" }
         );
-        const timestampDay = String(timestampDate.getDate()).padStart(2, "0");
-        const timestampDateFormatted = `${timestampYear}-${timestampMonth}-${timestampDay}`;
+
+        // 2. Extract the Calendar Date relative to New York (Not UTC)
+        const nyDateString = nyTime.toFormat("yyyy-MM-dd");
 
         // Ensure the data point is from yesterday
-        if (timestampDateFormatted === yesterdayFormatted) {
-          
+        if (nyDateString === yesterdayFormatted) {
+          const timestampDate = nyTime.toUTC().toJSDate(); // Convert to UTC Date object
           const securityDate = getSimulatedNextDate(timestampDate); // The final date to store
-          
+          const intradayData = timeSeries[timestampStr];
           const updateData = {
             security_id: company_id,
             security_type: "company",
@@ -751,17 +816,18 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
 
           // *** FIX: Use updateOne with upsert: true ***
           const result = await Securities.updateOne(
-            { // Filter (Unique Key)
-              security_id: company_id, 
-              date: securityDate, 
-              granularity: "1min" 
+            {
+              // Filter (Unique Key)
+              security_id: company_id,
+              date: securityDate,
+              granularity: "1min",
             },
             { $set: updateData }, // Data to set
             { upsert: true } // Insert if not found
           );
-          
+
           if (result.upsertedId || result.modifiedCount > 0) {
-              storedCount++;
+            storedCount++;
           }
         }
       }
@@ -784,16 +850,30 @@ async function fetchAndStoreYesterdayIntradayData(symbol, company_id) {
   }
 }
 
-//done
 async function aggregateDailyData() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const today = new Date(); // Target "Today" (Simulated Day)
+
+  // 1. Define the Safe Query Window
+  // We start at 07:00 UTC to safely skip the previous day's post-market spillover (which ends ~01:00 UTC).
+  // We end at 07:00 UTC tomorrow to capture the current day's post-market spillover.
+  const queryStart = new Date(today);
+  queryStart.setUTCHours(7, 0, 0, 0); 
+
+  const queryEnd = new Date(today);
+  queryEnd.setDate(queryEnd.getDate() + 1);
+  queryEnd.setUTCHours(5, 0, 0, 0);
+
+  // 2. Define Storage Date
+  // We still store the summary at 0:0:0:0 of the current day for clean charting.
+  const storageDate = new Date(today);
+  storageDate.setHours(0, 0, 0, 0);
 
   try {
+    console.log(`Aggregating extended hours data (04:00-20:00 ET) for: ${today.toDateString()}`);
+    console.log(`Query Window (UTC): ${queryStart.toISOString()} to ${queryEnd.toISOString()}`);
+
     const companyIds = await Securities.distinct("security_id", {
-      date: { $gte: today, $lt: tomorrow },
+      date: { $gte: queryStart, $lt: queryEnd },
       granularity: { $in: ["1min", "5min"] },
       security_type: "company",
     });
@@ -802,7 +882,7 @@ async function aggregateDailyData() {
       const granularData = await Securities.find({
         security_id: companyId,
         security_type: "company",
-        date: { $gte: today, $lt: tomorrow },
+        date: { $gte: queryStart, $lt: queryEnd }, // Uses the shifted window
         granularity: { $in: ["1min", "5min"] },
       }).sort({ date: 1 });
 
@@ -810,25 +890,22 @@ async function aggregateDailyData() {
         const openPrice = granularData[0].open_price;
         const closePrice = granularData[granularData.length - 1].close_price;
         const highPrice = Math.max(
-          ...granularData
-            .map((item) => item.high_price)
-            .filter((price) => price !== undefined)
+          ...granularData.map((item) => item.high_price).filter((p) => p !== undefined)
         );
         const lowPrice = Math.min(
-          ...granularData
-            .map((item) => item.low_price)
-            .filter((price) => price !== undefined)
+          ...granularData.map((item) => item.low_price).filter((p) => p !== undefined)
         );
         const totalVolume = granularData.reduce(
           (sum, item) => sum + (item.volume || 0),
           0
         );
 
+        // Store as a single Daily Candle
         await Securities.updateOne(
           {
             security_id: companyId,
             security_type: "company",
-            date: today,
+            date: storageDate,
             granularity: "daily",
           },
           {
@@ -844,18 +921,12 @@ async function aggregateDailyData() {
         );
       }
     }
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, "0");
-    const day = String(today.getDate()).padStart(2, "0");
-    console.log(
-      `Successfully aggregated daily data for ${year}-${month}-${day}`
-    );
+    console.log(`Successfully aggregated extended hours daily data.`);
   } catch (error) {
-    console.error("Error during daily aggregation:", error);
+    console.error("Error during extended hours aggregation:", error);
   }
 }
 
-// done
 async function pruneOldGranularData() {
   const now = new Date();
   const cutoffDate = new Date(now);
@@ -876,34 +947,42 @@ async function pruneOldGranularData() {
   }
 }
 
-// done
 async function pruneOldDailyData() {
   const now = new Date();
-  const cutoffDate = new Date(now);
-  cutoffDate.setFullYear(cutoffDate.getFullYear() - 2);
-  cutoffDate.setHours(0, 0, 0, 0);
+
+  // 1. Company Cutoff (2 Years + 1 Month Buffer)
+  // We add a buffer to ensure the '2Y' chart request never hits a deleted boundary.
+  const companyCutoff = new Date(now);
+  companyCutoff.setFullYear(companyCutoff.getFullYear() - 2);
+  companyCutoff.setMonth(companyCutoff.getMonth() - 1); 
+  companyCutoff.setHours(0, 0, 0, 0);
+
+  // 2. Mutual Fund Cutoff
+  const mfCutoff = new Date(now);
+  mfCutoff.setFullYear(mfCutoff.getFullYear() - 3);
+  mfCutoff.setHours(0, 0, 0, 0);
 
   try {
     const result = await Securities.deleteMany({
       security_type: "company",
       granularity: "daily",
-      date: { $lt: cutoffDate },
+      date: { $lt: companyCutoff },
     });
-    cutoffDate.setFullYear(cutoffDate.getFullYear() - 1);
+
     const result2 = await Securities.deleteMany({
       security_type: "mutualfund",
       granularity: "daily",
-      date: { $lt: cutoffDate },
+      date: { $lt: mfCutoff },
     });
+
     console.log(
-      `Successfully pruned ${result.deletedCount + result2} daily data points.`
+      `Successfully pruned ${result.deletedCount} Companies (older than ${companyCutoff.toDateString()}) and ${result2.deletedCount} Mutual Funds (older than ${mfCutoff.toDateString()}).`
     );
   } catch (error) {
     console.error("Error during pruning of old daily data:", error);
   }
 }
 
-// done
 async function fetchCompaniesData() {
   const companies = await Company.find(); // Fetch all companies from the database
   for (let i = 0; i < companies.length; i++) {
@@ -916,33 +995,40 @@ async function fetchCompaniesData() {
   console.log(`Workspaced 1min data for all Companies successfully`);
 }
 
-// done
 async function removeYesterdayOneMinuteData() {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // 1. Get the Start of the Current Day in New York
+    // This creates a clear boundary: "Anything before 00:00 ET Today"
+    // is considered "Yesterday" or older in terms of trading sessions.
+    const startOfTodayNY = DateTime.now().setZone("America/New_York").startOf("day");
 
+    // 2. Convert to JS Date (UTC) for the MongoDB query
+    const deletionCutoff = startOfTodayNY.toJSDate();
+
+    // 3. Calculate "Yesterday" string for logging purposes
+    // (This represents the trading day we are effectively wiping out)
+    const previousTradingDay = startOfTodayNY.minus({ days: 1 });
+    const formattedDate = previousTradingDay.toFormat("yyyy-MM-dd");
+
+    console.log(`Removing 1-min data older than: ${startOfTodayNY.toISO()} (ET Base)`);
+
+    // 4. Delete data strictly OLDER than the start of the current NY day
     const result = await Securities.deleteMany({
       security_type: "company",
       granularity: "1min",
-      date: { $lt: today },
+      date: { $lt: deletionCutoff },
     });
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const year = yesterday.getFullYear();
-    const month = String(yesterday.getMonth() + 1).padStart(2, "0");
-    const day = String(yesterday.getDate()).padStart(2, "0");
 
     console.log(
-      `Successfully removed ${result.deletedCount} documents of 1-min data for ${year}-${month}-${day}`
+      `Successfully removed ${result.deletedCount} documents of 1-min data for ${formattedDate} and older.`
     );
   } catch (error) {
     console.error("Error removing yesterday's 1-min data:", error);
   }
 }
 
-//done
 async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
+  const INTRADAY_INTERVAL = "5min";
   try {
     const yesterday = getSimulatedPrevDate();
     yesterday.setHours(0, 0, 0, 0);
@@ -952,9 +1038,8 @@ async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
     const day = String(yesterday.getDate()).padStart(2, "0");
     const yesterdayFormatted = `${year}-${month}-${day}`;
 
-    console.log(`Workspaceing 5-min data for: ${yesterdayFormatted}`);
+    console.log(`Fetching 5-min data for: ${symbol} for ${yesterdayFormatted}`);
     const functionParam = "TIME_SERIES_INTRADAY";
-    const interval = "5min"; // Set the interval to 5 minutes
 
     const options = {
       method: "GET",
@@ -963,8 +1048,8 @@ async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
         datatype: "json",
         function: functionParam,
         symbol: symbol,
-        interval: interval,
-        outputsize: "full", // Fetch all available intraday data for yesterday
+        interval: INTRADAY_INTERVAL,
+        outputsize: "full",
       },
       headers: {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
@@ -974,39 +1059,60 @@ async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
 
     const response = await axios.request(options);
     const data = response.data;
+    let storedCount = 0; // Initialize counter
 
-    if (data && data[`Time Series (${interval})`]) {
-      const timeSeries = data[`Time Series (${interval})`];
+    if (data && data[`Time Series (${INTRADAY_INTERVAL})`]) {
+      const timeSeries = data[`Time Series (${INTRADAY_INTERVAL})`];
 
       for (const timestampStr in timeSeries) {
-        const intradayData = timeSeries[timestampStr];
-        const timestampDate = new Date(timestampStr);
-        const timestampYear = timestampDate.getFullYear();
-        const timestampMonth = String(timestampDate.getMonth() + 1).padStart(
-          2,
-          "0"
+        
+        // 1. Parse the string as New York Time explicitly
+        const nyTime = DateTime.fromFormat(
+          timestampStr,
+          "yyyy-MM-dd HH:mm:ss",
+          { zone: "America/New_York" }
         );
-        const timestampDay = String(timestampDate.getDate()).padStart(2, "0");
-        const timestampDateFormatted = `${timestampYear}-${timestampMonth}-${timestampDay}`;
+
+        // 2. Extract the Calendar Date relative to New York (Not UTC)
+        const nyDateString = nyTime.toFormat("yyyy-MM-dd");
 
         // Ensure the data point is from yesterday
-        if (timestampDateFormatted === yesterdayFormatted) {
-          const newStockData = new Securities({
+        if (nyDateString === yesterdayFormatted) {
+          const timestampDate = nyTime.toUTC().toJSDate(); // Convert to UTC Date object
+          const securityDate = getSimulatedNextDate(timestampDate); // The final date to store
+          const intradayData = timeSeries[timestampStr];
+          
+          const updateData = {
             security_id: company_id,
             security_type: "company",
-            date: getSimulatedNextDate(timestampDate),
+            date: securityDate,
             open_price: parseFloat(intradayData["1. open"]),
             high_price: parseFloat(intradayData["2. high"]),
             low_price: parseFloat(intradayData["3. low"]),
             close_price: parseFloat(intradayData["4. close"]),
             volume: parseInt(intradayData["5. volume"]),
             granularity: "5min",
-          });
-          await newStockData.save();
+          };
+
+          // *** FIX: Use updateOne with upsert: true ***
+          const result = await Securities.updateOne(
+            {
+              // Filter (Unique Key)
+              security_id: company_id,
+              date: securityDate,
+              granularity: "5min",
+            },
+            { $set: updateData }, // Data to set
+            { upsert: true } // Insert if not found
+          );
+
+          if (result.upsertedId || result.modifiedCount > 0) {
+            storedCount++;
+          }
         }
       }
       console.log(
-        `Workspaceed and stored 5-min data for ${symbol} for yesterday (${yesterdayFormatted})`
+        `Successfully upserted ${storedCount} 5-min data points for ${symbol} for yesterday (${yesterdayFormatted})`
       );
     } else if (data && data.Note) {
       console.warn(`Alpha Vantage API Note for ${symbol}: ${data.Note}`);
@@ -1027,7 +1133,6 @@ async function fetchAndStoreYesterdayFiveMinuteData(symbol, company_id) {
   }
 }
 
-// done
 async function fetchCompaniesDataFiveMinuteData() {
   const companies = await Company.find(); // Fetch all companies from the database
   for (let i = 0; i < companies.length; i++) {
@@ -1040,16 +1145,16 @@ async function fetchCompaniesDataFiveMinuteData() {
   console.log(`Workspaced 5min data for all Companies successfully`);
 }
 
-// Start the run after atleast 6AM IST 
+// Start the run after atleast 7AM IST
 
 // --- Scheduler for orders ---
-cron.schedule("53 1 * * *", fetchUsersAndFulfillOrders); // run everday after market close
+cron.schedule("13 1 * * *", fetchUsersAndFulfillOrders); // run everday after market close (5 mins) e.g., run after 6:31am IST // morning 6:15-7am IST
 
 // Schedule for stocks data fetching and aggregation
-cron.schedule("51 0 * * *", fetchAndStoreDailyNav); //(5 mins) e.g., run at 6:30 PM
-cron.schedule("55 0 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data
-cron.schedule("20 01 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day
-cron.schedule("22 01 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day
-cron.schedule("47 01 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day
-cron.schedule("49 01 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data)
-cron.schedule("51 01 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data)
+cron.schedule("41 1 * * *", fetchAndStoreDailyNav); //(5 mins) e.g., run after 6:30am IST // morning 7am IST
+cron.schedule("30 01 * * *", fetchCompaniesData); // 1(30 mins) Schedule to fetch yesterday's intraday data // morning 7-8am IST
+cron.schedule("33 1 * * *", removeYesterdayOneMinuteData); // 2(5 mins) Run at 00:00 every day // morning 7-8am IST
+cron.schedule("47 01 * * *", fetchCompaniesDataFiveMinuteData); // 3(30 mins) Run at 01:00 every day // morning 7-8am IST
+cron.schedule("27 01 * * *", aggregateDailyData); // 4(5 mins) Run at 00:45 every day // morning 7-8am IST
+cron.schedule("29 01 * * *", pruneOldGranularData); // 5(5 mins) Run at 00:30 every day(5min  data) // morning 7-8am IST
+cron.schedule("31 01 * * *", pruneOldDailyData); // 6(5 mins) Run at 01:00 every day(daily 2yr old data) // morning 7-8am IST
