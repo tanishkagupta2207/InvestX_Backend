@@ -94,7 +94,7 @@ router.post("/cancel", fetchUser, async (req, res) => {
     const order = await Orders.findById(orderId);
     if (!order) return res.status(404).json({ success: false, msg: "Order not found" });
 
-    if (order.user_id !== req.user.id) {
+    if (order.user_id.toString() !== req.user.id) {
       return res.status(401).json({ success: false, msg: "Not authorized" });
     }
 

@@ -80,6 +80,10 @@ const OrdersSchema = new mongoose.Schema(
     date: {
       type: Date,
       default: Date.now,
+    },
+    msg: {
+        type: String,
+        default: null
     }
   },
   { timestamps: true }

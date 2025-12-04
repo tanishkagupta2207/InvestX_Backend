@@ -63,40 +63,32 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
     order_sub_type,
   } = order;
   const action = order_type;
+  
+  // Initialize amount
   let amount = quantity * nav;
   if (action === "Buy") {
-    amount *= -1;
+    amount *= -1; 
   }
+
+  // Variable to store the status message
+  let orderMessage = null;
+
   try {
-    //USER VALIDATION
+    // 1. VALIDATIONS
     const user = await User.findById(user_id);
-    if (!user) {
-      console.log(`User with ID ${user_id} not found.`);
-      return;
-    }
-    // PORTFOLIO VALIDATION
+    if (!user) return;
     const portfolio = await Portfolio.findOne({ user_id: user_id });
-    if (!portfolio) {
-      console.log(`User portfolio for ID ${user_id} not found.`);
-      return;
-    }
-    //ORDER VALIDATION
+    if (!portfolio) return;
     const orderForUpdate = await Orders.findById(order._id);
-    if (!orderForUpdate) {
-      console.log(`Order with ID ${order._id} not found.`);
-      return;
-    }
-    // SECURITY VALIDATION
+    if (!orderForUpdate) return;
+    
     let security;
     if (security_type === "mutualfund") {
       security = await MutualFund.findById(security_id);
     }
-    if (!security) {
-      // check if mutual fund exists
-      console.log(`Security with ID ${security_id} not found.`);
-      return;
-    }
-    // Determine if it's the right time to process a SIP/SWP (mutual fund pending order can only be SIP or SWP)
+    if (!security) return;
+
+    // 2. SIP/SWP FREQUENCY CHECK
     if (order_sub_type !== "MARKET") {
       const today = new Date(updationDate);
       const lastProcessedDate = new Date(order.order_updation_date);
@@ -108,73 +100,103 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
         const daysDiff = Math.floor(
           (today - lastProcessedDate) / (1000 * 60 * 60 * 24)
         );
-        if (daysDiff >= 7) {
-          isDue = true;
-        }
+        if (daysDiff >= 7) isDue = true;
       } else if (order.frequency === "MONTHLY") {
-        if (today.getDate() === lastProcessedDate.getDate()) {
-          const monthsDiff =
-            (today.getFullYear() - lastProcessedDate.getFullYear()) * 12 +
-            (today.getMonth() - lastProcessedDate.getMonth());
-          if (monthsDiff >= 1) {
+        const monthsDiff = (today.getFullYear() - lastProcessedDate.getFullYear()) * 12 + (today.getMonth() - lastProcessedDate.getMonth());
+        if (monthsDiff >= 1 && today.getDate() >= lastProcessedDate.getDate()) {
             isDue = true;
-          }
+        } else if (monthsDiff > 1) {
+            isDue = true; 
         }
       }
 
-      if (!isDue) {
-        return;
-      }
+      if (!isDue) return; 
     }
 
-    // USER HOLDING VALIDATION
+    // 3. CHECK HOLDINGS & BALANCE
     let userHolding = await UserHoldings.findOne({
       portfolio_id: portfolio._id,
       security_id: security_id,
       security_type: security_type,
     });
+
     let partialFill = false;
+
     if (action === "Sell") {
       if (!userHolding) {
         quantity = 0;
         amount = 0;
         partialFill = true;
+        // MSG: REJECTION
+        orderMessage = "Rejected: User does not hold this security."; 
       } else if (userHolding.quantity < quantity) {
         quantity = userHolding.quantity;
         amount = quantity * nav;
         partialFill = true;
+        // MSG: PARTIAL FILL
+        orderMessage = `Partially Filled: Insufficient holdings. Sold available ${quantity.toFixed(4)} units.`; 
       }
     } else {
+      // BUY: Check Balance
       if (user.balance + amount < 0) {
         partialFill = true;
-        quantity = user.balance / nav;
-        amount = quantity * nav;
+        if (user.balance > 1) { // Ensure at least 1 rupee/cent to trade
+            // Partial Buy
+            // Calculate max quantity affordable (Keep 4 decimals)
+            quantity = Math.floor((user.balance / nav) * 10000) / 10000;
+            amount = quantity * nav * -1;
+            // MSG: PARTIAL FILL
+            orderMessage = `Partially Filled: Insufficient balance. Bought units worth ₹${user.balance.toFixed(2)}.`;
+        } else {
+            // Total Reject
+            quantity = 0;
+            amount = 0;
+            // MSG: REJECTION
+            orderMessage = "Rejected: Insufficient wallet balance."; 
+        }
       }
     }
 
+    // 4. UPDATE ORDER
     orderForUpdate.order_updation_date = updationDate;
-    orderForUpdate.filled_quantity += quantity;
-    const totalFilled = orderForUpdate.filled_quantity;
-    orderForUpdate.average_fill_price =
-      (orderForUpdate.average_fill_price * (totalFilled - quantity) +
-        nav * quantity) /
-      totalFilled;
+    
+    const prevFilledQty = orderForUpdate.filled_quantity || 0;
+    const prevAvgPrice = orderForUpdate.average_fill_price || 0;
+
+    orderForUpdate.filled_quantity = prevFilledQty + quantity;
+
+    if (orderForUpdate.filled_quantity > 0) {
+        orderForUpdate.average_fill_price = 
+            ((prevAvgPrice * prevFilledQty) + (nav * quantity)) / orderForUpdate.filled_quantity;
+    } else {
+        orderForUpdate.average_fill_price = 0;
+    }
+
     if (order_sub_type === "MARKET") {
       if (partialFill && quantity === 0) {
         orderForUpdate.status = "REJECTED";
       } else {
         orderForUpdate.status = partialFill ? "PARTIALLY_FILLED" : "FILLED";
+        // MSG: SUCCESS (If no partial message exists)
+        if (!orderMessage) {
+            orderMessage = "Order executed successfully.";
+        }
       }
+    }
+
+    // SAVE THE MESSAGE
+    if (orderMessage) {
+        orderForUpdate.msg = orderMessage;
     }
 
     await orderForUpdate.save();
 
-    // not enough balance or holdings to fulfill any part of the order, hence no transaction or change in user holdings
+    // 5. TRANSACTIONS & USER HOLDINGS
     if (partialFill && quantity === 0) {
-      return;
+      return; 
     }
-    //transaction add
-    const transaction = await Transactions.create({
+
+    await Transactions.create({
       user_id: user_id,
       security_id: security_id,
       security_type: security_type,
@@ -183,25 +205,26 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
       quantity: quantity,
       date: updationDate,
     });
+
     user.balance += amount;
     await user.save();
+
     if (userHolding) {
       if (action === "Buy") {
-        const total =
-          userHolding.average_price * userHolding.quantity + nav * quantity;
+        const totalValue = (userHolding.average_price * userHolding.quantity) + (nav * quantity);
         userHolding.quantity += quantity;
-        userHolding.average_price = total / userHolding.quantity;
+        userHolding.average_price = totalValue / userHolding.quantity;
         await userHolding.save();
       } else {
         userHolding.quantity -= quantity;
-        if (userHolding.quantity === 0) {
+        if (userHolding.quantity <= 0.000001) {
           await UserHoldings.deleteOne({ _id: userHolding._id });
         } else {
           await userHolding.save();
         }
       }
     } else if (action === "Buy") {
-      const updatedUserHolding = await UserHoldings.create({
+      await UserHoldings.create({
         portfolio_id: portfolio._id,
         security_id: security_id,
         security_type: security_type,
@@ -209,9 +232,6 @@ async function updateMutualOrderStatusInDB(order, nav, updationDate) {
         average_price: nav,
       });
     }
-    console.log(
-      `Order ${order._id} for ${quantity} units of ${security.name} at ${nav} has been updated.`
-    );
   } catch (error) {
     console.error("Error updating mutual fund order status:", error);
   }
@@ -260,7 +280,11 @@ async function fulfillMutualFundOrdersDaily(orderId) {
           await updatedOrder.save();
         }
       }
+    } else if (order.status === "PENDING") {
+      const nav = latestNavData.nav;
+      await updateMutualOrderStatusInDB(order, nav, latestNavData.date);
     }
+
   } catch (error) {
     console.error("Error fulfilling mutual fund order:", error);
   }
@@ -269,26 +293,30 @@ async function fulfillMutualFundOrdersDaily(orderId) {
 async function updateOrderStatusInDB(order, price, updationDate) {
   let { quantity, order_type, security_id, security_type, user_id } = order;
   let action = order_type;
+  
+  // Initialize amountToAdd
+  let amountToAdd = quantity * price;
+  if (action === "Buy") {
+    amountToAdd *= -1; // Negative for Buy
+  }
+
+  // NEW: Variable to store the status message
+  let orderMessage = null;
+
   try {
-    let amountToAdd = quantity * price;
-    if (action === "Buy") {
-      amountToAdd *= -1;
-    }
-    //USER VALIDATION
+    // 1. VALIDATIONS
     let user = await User.findById(user_id);
     if (!user) {
       console.log(`User with ID ${user_id} not found.`);
       return;
     }
 
-    // PORTFOLIO VALIDATION
     let portfolio = await Portfolio.findOne({ user_id: user_id });
     if (!portfolio) {
       console.log(`User portfolio for ID ${user_id} not found.`);
       return;
     }
 
-    //ORDER VALIDATION
     let orderForUpdate = await Orders.findById(order._id);
     if (!orderForUpdate) {
       console.log(`Order with ID ${order._id} not found.`);
@@ -297,7 +325,6 @@ async function updateOrderStatusInDB(order, price, updationDate) {
 
     let security;
     if (security_type === "company") {
-      // check if company exists
       security = await Company.findById(security_id);
     }
     if (!security) {
@@ -305,6 +332,7 @@ async function updateOrderStatusInDB(order, price, updationDate) {
       return;
     }
 
+    // 2. CHECK HOLDINGS & BALANCE
     let userHolding = await UserHoldings.findOne({
       portfolio_id: portfolio._id,
       security_id: security_id,
@@ -312,28 +340,62 @@ async function updateOrderStatusInDB(order, price, updationDate) {
     });
 
     let partialFill = false;
+
     if (action === "Sell") {
       if (!userHolding) {
+        // REJECT: No holdings
         quantity = 0;
         amountToAdd = 0;
         partialFill = true;
+        orderMessage = "Rejected: User does not hold this security.";
       } else if (userHolding.quantity < quantity) {
+        // PARTIAL: Not enough holdings
         quantity = userHolding.quantity;
         amountToAdd = quantity * price;
         partialFill = true;
+        orderMessage = `Partially Filled: Insufficient holdings. Sold available ${quantity} units.`;
       }
     } else {
+      // BUY: Check Balance
       if (user.balance + amountToAdd < 0) {
         partialFill = true;
-        quantity = user.balance / price;
-        amountToAdd = quantity * price;
+        
+        // Check if user has enough for at least 1 unit or a fraction (depending on logic)
+        // Here we try to buy as much as possible with remaining balance
+        if (user.balance > 0) {
+            quantity = Math.floor(user.balance / price); // usually stocks are whole units, use Math.floor
+            amountToAdd = quantity * price * -1;
+            
+            if (quantity > 0) {
+                orderMessage = `Partially Filled: Insufficient balance. Bought ${quantity} units.`;
+            } else {
+                // Balance exists but not enough for even 1 unit
+                quantity = 0;
+                amountToAdd = 0;
+                orderMessage = "Rejected: Insufficient balance to buy even 1 unit.";
+            }
+        } else {
+            // Balance is 0 or negative
+            quantity = 0;
+            amountToAdd = 0;
+            orderMessage = "Rejected: Insufficient wallet balance.";
+        }
       }
     }
 
+    // 3. UPDATE ORDER STATUS
     if (partialFill) {
       orderForUpdate.status = quantity === 0 ? "REJECTED" : "PARTIALLY_FILLED";
     } else {
       orderForUpdate.status = "FILLED";
+      if (!orderMessage) {
+        orderMessage = "Order executed successfully.";
+      }
+    }
+
+    // SAVE THE MESSAGE
+    if (orderMessage) {
+        orderForUpdate.msg = orderMessage;
     }
 
     orderForUpdate.order_updation_date = updationDate;
@@ -341,12 +403,12 @@ async function updateOrderStatusInDB(order, price, updationDate) {
     orderForUpdate.average_fill_price = price;
     await orderForUpdate.save();
 
-    // RETURN IF ORDER GOT REJECTED
+    // 4. RETURN IF REJECTED (No Transaction)
     if (partialFill && quantity === 0) {
       return;
     }
 
-    //transaction mei will save
+    // 5. CREATE TRANSACTION
     const transaction = await Transactions.create({
       user_id: user_id,
       security_id: security_id,
@@ -357,9 +419,11 @@ async function updateOrderStatusInDB(order, price, updationDate) {
       date: updationDate,
     });
 
+    // 6. UPDATE USER BALANCE
     user.balance += amountToAdd;
     await user.save();
 
+    // 7. UPDATE HOLDINGS
     if (userHolding) {
       if (action === "Buy") {
         const total =
@@ -384,10 +448,6 @@ async function updateOrderStatusInDB(order, price, updationDate) {
         average_price: price,
       });
     }
-
-    console.log(
-      `Order ${order._id} for ${quantity} units of ${security.name} at ${price} has been updated.`
-    );
   } catch (error) {
     console.error("Error updating order status:", error);
   }
@@ -1148,7 +1208,7 @@ async function fetchCompaniesDataFiveMinuteData() {
 // Start the run after atleast 7AM IST
 
 // --- Scheduler for orders ---
-cron.schedule("13 1 * * *", fetchUsersAndFulfillOrders); // run everday after market close (5 mins) e.g., run after 6:31am IST // morning 6:15-7am IST
+cron.schedule("29 3 * * *", fetchUsersAndFulfillOrders); // run everday after market close (5 mins) e.g., run after 6:31am IST // morning 6:15-7am IST
 
 // Schedule for stocks data fetching and aggregation
 cron.schedule("41 1 * * *", fetchAndStoreDailyNav); //(5 mins) e.g., run after 6:30am IST // morning 7am IST

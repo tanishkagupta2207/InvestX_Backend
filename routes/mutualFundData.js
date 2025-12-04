@@ -2,8 +2,8 @@ const router = require("express").Router();
 const Securities = require("../models/Securities");
 const MutualFund = require("../models/MutualFund");
 const fetchUser = require("../middleware/fetchUser");
+const { DateTime } = require("luxon");
 
-// --- 1. NAV Data Fetching API Endpoint (History) ---
 // --- 1. NAV Data Fetching API Endpoint (History) ---
 router.post("/data", fetchUser, async (req, res) => {
   const { security_id, range } = req.body;
